@@ -1,0 +1,154 @@
+import numpy as np
+from shapely.geometry import Polygon
+
+
+def get_forward_vector(rotation_matrix):
+    """
+    Extracts the forward viewing vector from a Rotation Matrix.
+    Assumes standard convention where the camera looks down the Z-axis (local [0,0,1]).
+
+    If your convention is different (e.g., Y-axis), change the index below.
+    """
+    matrix = np.array(rotation_matrix)
+    # The 3rd column (index 2) usually represents the Z-axis vector in world coordinates
+    forward_vector = matrix[:, 2]
+    return forward_vector / np.linalg.norm(forward_vector)
+
+
+def calculate_angle_degrees(vec1, vec2):
+    """
+    Calculates the angle in degrees between two normalized 3D vectors.
+    """
+    # Dot product: a . b = |a||b|cos(theta) -> since normalized: cos(theta)
+    dot_product = np.dot(vec1, vec2)
+    # Clip to handle floating point errors slightly outside [-1, 1]
+    dot_product = np.clip(dot_product, -1.0, 1.0)
+    angle_rad = np.arccos(dot_product)
+    return np.degrees(angle_rad)
+
+
+def calculate_iou(poly1, poly2):
+    if not poly1.intersects(poly2):
+        return 0.0
+    inter = poly1.intersection(poly2).area
+    union = poly1.union(poly2).area
+    return inter / union if union > 0 else 0.0
+
+
+def prune_redundant_areas_with_rotation(
+    coords_list,
+    rotation_matrices,
+    max_areas_to_keep,
+    iou_threshold=0.5,
+    angle_threshold_degrees=15.0
+):
+    """
+    Prunes overlapping areas, but KEEPS them if they have different viewing angles.
+    """
+
+    # 1. Pre-process: Create (Polygon, ViewVector, OriginalIndex) tuples
+    poly_data = []
+
+    for i, coords in enumerate(coords_list):
+        try:
+            p = Polygon(coords)
+            if not p.is_valid:
+                p = p.convex_hull
+
+            if p.is_valid and p.area > 0:
+                # Extract the view vector immediately to save time later
+                view_vec = get_forward_vector(rotation_matrices[i])
+                poly_data.append({
+                    'poly': p,
+                    'vec': view_vec,
+                    'id': i,
+                    'area': p.area
+                })
+        except ValueError:
+            continue
+
+    # 2. Sort by Area (Descending)
+    poly_data.sort(key=lambda x: x['area'], reverse=True)
+
+    kept_items = []  # Stores the full dictionaries of kept items
+
+    # 3. Iterate
+    for current in poly_data:
+        if len(kept_items) >= max_areas_to_keep:
+            break
+
+        is_redundant = False
+
+        for kept in kept_items:
+            # A. Check Spatial Overlap first (usually faster to reject)
+            iou = calculate_iou(current['poly'], kept['poly'])
+
+            if iou > iou_threshold:
+                # B. High overlap found. Now check if the VIEW is also similar.
+                angle_diff = calculate_angle_degrees(
+                    current['vec'], kept['vec'])
+
+                # If the views are too similar (low angle difference), it is redundant.
+                # If the views are different (high angle difference), we KEEP it (not redundant).
+                if angle_diff < angle_threshold_degrees:
+                    is_redundant = True
+                    break
+
+        if not is_redundant:
+            kept_items.append(current)
+
+    # 4. Extract original indices and sort them
+    result_indices = [item['id'] for item in kept_items]
+    result_indices.sort()
+
+    return result_indices
+
+# --- Example Usage ---
+
+
+if __name__ == "__main__":
+    # Helper to create a simple rotation matrix around Y axis (horizontal turn)
+    def rotation_y(degrees):
+        rad = np.radians(degrees)
+        c, s = np.cos(rad), np.sin(rad)
+        # Standard rotation matrix
+        return [
+            [c,  0, s],
+            [0,  1, 0],
+            [-s, 0, c]
+        ]
+
+    # --- Scenario ---
+    # We have 3 identical squares (perfect overlap).
+    # 1. Looking North (0 deg)
+    # 2. Looking North (5 deg difference) -> Should be PRUNED (Redundant)
+    # 3. Looking East (90 deg difference) -> Should be KEPT (Different view)
+
+    square_coords = [(0, 0), (10, 0), (10, 10), (0, 10)]
+
+    coords = [square_coords, square_coords, square_coords]
+
+    matrices = [
+        rotation_y(0),   # Index 0: Base view
+        rotation_y(5),   # Index 1: Very similar to 0 (Should be removed)
+        rotation_y(90)   # Index 2: Perpendicular view (Should be kept)
+    ]
+
+    print(f"Total Inputs: {len(coords)}")
+
+    # Run Pruning
+    # angle_threshold=10 means views within 10 degrees of each other are redundant
+    indices = prune_redundant_areas_with_rotation(
+        coords,
+        matrices,
+        max_areas_to_keep=10,
+        iou_threshold=0.5,
+        angle_threshold_degrees=10.0
+    )
+
+    print(f"Kept Indices: {indices}")
+
+    if 0 in indices and 2 in indices and 1 not in indices:
+        print("SUCCESS: Kept distinct views, removed similar view.")
+    else:
+        print("FAIL: Logic incorrect.")

@@ -1,0 +1,16 @@
+device:
+  id: "M3T"
+  config_path: "config/devices/devices_DJI_config.yaml"
+
+
+preprocessing_args:
+  camera_destination_name: "EO"
+  clips_computer_args:
+    clip_length: 100
+    clip_delta: 3
+    clips_constraints:
+      min_alt: 0
+      min_pitch: -100
+      max_pitch: -50
+      threshold_gimbal_rotation: 20
+  delta_frames: 3
