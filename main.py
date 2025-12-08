@@ -79,12 +79,12 @@ def main(video_path, output_root, config_path, api_key, zoom_level, iou_threshol
     img_width, img_height = device_config.cameras.get('EO').intrinsic_settings.image_size
 
     # Define the 4 corners of the image in pixel coordinates (Homogeneous coords)
-    # Top-Left, Top-Right, Bottom-Left, Bottom-Right
+    # Top-Left, Top-Right, Bottom-Left, Bottom-Right : Need to have W -1.
     image_corners_homogeneous = np.array([
         [0, 0, 1],
-        [img_width, 0, 1],
-        [0, img_height, 1],
-        [img_width, img_height, 1]
+        [img_width - 1, 0, 1],
+        [0, img_height - 1, 1],
+        [img_width - 1, img_height - 1, 1]
     ])
 
     fov_wgs84_list = []      # Will store 4 corner points (Lat/Lon) for each frame
@@ -188,26 +188,6 @@ def main(video_path, output_root, config_path, api_key, zoom_level, iou_threshol
             shutil.copy(source_path, dest_path)
         else:
             print(f"      Warning: Source file missing {source_path}")
-
-    # #  TEMPORARY INPUT--------------------------
-    # import pandas as pd
-    # import ast
-    # import numpy as np
-
-    # satellite_download_dir = Path(
-    #     'data/preprocessing_all_corrected/DJI_20251029161705_0001_V/Tiles_z18')
-    # filtered_metadata = pd.read_csv(
-    #     "data/preprocessing_all_corrected/DJI_20251029161705_0001_V/Pruned_Frames_ioU0.5_angle15/metadata.csv", index_col=0)
-
-    # # Convert the string column to actual NumPy arrays
-    # filtered_metadata['fov_mercator'] = filtered_metadata['fov_mercator'].apply(
-    #     lambda x: np.array(ast.literal_eval(x)))
-
-    # print(filtered_metadata["fov_mercator"])
-
-    # merged_tiff_path = "data/preprocessing_all_corrected/DJI_20251029161705_0001_V/Tiles_z18/Flight_zone.tiff"
-    # working_dir = "data/preprocessing_all_corrected/DJI_20251029161705_0001_V"
-    # #  END OF TEMPORARY INPUT ----------------------
 
     # --- Step 6: Extract Matching Satellite Tiles ---
     print(f"\n[6/6] Extracting Matched Satellite Tiles...")
