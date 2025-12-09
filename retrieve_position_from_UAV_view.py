@@ -107,13 +107,14 @@ def process(lat, lon, alt, rel_alt, pitch, yaw, roll, K_coefs, pxl_vectors, scal
         print("NED Offsets (X, Y, Z):\n", points_vectors_Q_NED)
 
     # 8. Convert NED offsets to Geodetic
-    points_vectors_Q_coord = np.zeros(points_vectors_Q_NED.shape)
-    for i in range(len(points_vectors_Q_coord)):
-        points_vectors_Q_coord[i] = np.array(get_lat_lon_alt_from_NED_dep(
+    points_vectors_Q_coord = []
+    for i in range(len(points_vectors_Q_NED)):
+        phi, lam, h = get_lat_lon_alt_from_NED_dep(
             points_vectors_Q_NED[i, 0],
             points_vectors_Q_NED[i, 1],
             points_vectors_Q_NED[i, 2],
-            lat, lon, alt))
+            lat, lon, alt)
+        points_vectors_Q_coord.append([phi, lam, h])
 
     return points_vectors_Q_coord
 

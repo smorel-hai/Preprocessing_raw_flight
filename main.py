@@ -1,8 +1,9 @@
 from pathlib import Path
 from yaml import safe_load
 import numpy as np
-from pyproj import Transformer
 import shutil
+from utils import convert_wgs84_to_web_mercator
+
 
 # Custom module imports
 from crotalinae_pg.data_preprocessing.raw.video_processor import VideoProcessor
@@ -45,24 +46,6 @@ def extract_candidate_frames(video_path, output_root, config_path, frames_folder
     return device_config, telemetry_metadata
 
 
-def batch_convert_wgs84_to_mercator(lat_lon_poly_list):
-    """
-    Converts a list of polygon coordinates from WGS84 (Lat/Lon) to Web Mercator (Meters).
-    """
-    to_mercator = Transformer.from_crs("epsg:4326", "epsg:3857", always_xy=True)
-    mercator_poly_list = []
-
-    for polygon in lat_lon_poly_list:
-        mercator_poly = []
-        for point in polygon:
-            # transform takes (lon, lat)
-            x_meters, y_meters = to_mercator.transform(point[1], point[0])
-            mercator_poly.append((x_meters, y_meters))
-
-        mercator_poly_list.append(mercator_poly)
-    return mercator_poly_list
-
-
 def main(video_path, output_root, config_path, api_key, zoom_level, iou_threshold=0.5, angle_threshold=15, frames_folder_name='frames_candidates'):
 
     # --- Step 1: Extract Frames from Video ---
@@ -102,7 +85,6 @@ def main(video_path, output_root, config_path, api_key, zoom_level, iou_threshol
         pitch, yaw, roll = row['Gimbal Pitch'], row['Gimbal Yaw'], row['Gimbal Roll']
 
         # 1. Project image corners to the ground (WGS84 Coordinates)
-        # Previously named 'retrieve_field_view' / 'Q_points'
         fov_coords = calculate_fov_coords(
             lat, lon, alt, rel_alt,
             pitch, yaw, roll,
@@ -150,10 +132,10 @@ def main(video_path, output_root, config_path, api_key, zoom_level, iou_threshol
     print(f"\n[4/6] Pruning Redundant Frames...")
 
     # Convert FOV coordinates to Web Mercator (Meters) for accurate area calculation
-    metadata_df['fov_mercator'] = batch_convert_wgs84_to_mercator(metadata_df['fov_wgs84'])
+    metadata_df['fov_mercator'] = [convert_wgs84_to_web_mercator(coords) for coords in metadata_df['fov_wgs84']]
 
-    # Save raw metadata before pruning
-    metadata_df.to_csv(working_dir / frames_folder_name / "metadata_raw.csv")
+    # Save updated metadata before pruning
+    metadata_df.to_csv(working_dir / frames_folder_name / "metadata_fov.csv")
 
     # Run the Smart Filter (IoU + Rotation check)
     kept_indices = prune_redundant_areas_with_rotation(
