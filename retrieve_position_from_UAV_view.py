@@ -56,16 +56,21 @@ def get_lat_lon_alt_from_NED_dep(x, y, z, phi0_deg, lam0_deg, h0):
     return phi.item(), lam.item(), h.item()
 
 
-def process(lat, lon, alt, rel_alt, pitch, yaw, roll, K_coefs, pxl_vectors, scale=(1, 1), verbose=-1):
-    # 1. Get Rotation Matrix (Body -> NED)
-    # Note: Ensure pitch/roll/yaw match the drone's IMU frame (Nose Forward)
-    R_body_to_ned = get_R(pitch, yaw, roll)
+def get_calibration_matrix(K_coefs, scale=(1, 1)):
     sx, sy = scale
 
     # 2. Construct Camera Matrix
     K = np.array([[K_coefs[0] * sx, 0, K_coefs[2] * sx],
                   [0, K_coefs[1] * sy, K_coefs[3] * sy],
                   [0, 0, 1]])
+    return K
+
+
+def process(lat, lon, alt, rel_alt, pitch, yaw, roll, K_coefs, pxl_vectors, scale=(1, 1), verbose=-1):
+    # 1. Get Rotation Matrix (Body -> NED)
+    # Note: Ensure pitch/roll/yaw match the drone's IMU frame (Nose Forward)
+    R_body_to_ned = get_R(pitch, yaw, roll)
+    K = get_calibration_matrix(K_coefs, scale)
 
     # 3. Define Pixel Vectors (Homogeneous)
     # Top-Left, Top-Right, Bottom-Left, Bottom-Right

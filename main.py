@@ -2,16 +2,18 @@ from pathlib import Path
 from yaml import safe_load
 import numpy as np
 import shutil
-from utils import convert_wgs84_to_web_mercator
 
 
 # Custom module imports
 from crotalinae_pg.data_preprocessing.raw.video_processor import VideoProcessor
 from crotalinae_pg.data_preprocessing.raw.utils.devices import load_device_config
-from retrieve_position_from_UAV_view import process as calculate_fov_coords, get_R as get_rotation_matrix
+from retrieve_position_from_UAV_view import process as calculate_fov_coords, get_R as get_rotation_matrix, get_calibration_matrix
 from retreieve_satellite_image_depending_on_coord import download_tiles, get_bounding_box, merge_tiles_to_geotiff
 from pruning_tile import prune_redundant_areas_with_rotation
 from extract_satellite_tile_from_drone_view import get_best_tile_for_fov, save_tile_to_disk
+from pnp import get_camera_position_robust
+from utils.QGIS_generation_files import generate_multi_camera_geojson, generate_position_comparison_geojson
+from utils.utils import convert_wgs84_to_web_mercator, convert_mercator_to_wgs84
 
 
 def extract_candidate_frames(video_path, output_root, config_path, frames_folder_name):
@@ -190,18 +192,53 @@ def main(video_path, output_root, config_path, api_key, zoom_level, iou_threshol
             count += 1
 
     print(f"      Successfully saved {count} satellite crops.")
+
+    # --- Step Optional: Compute retrieval of camera position and QGIS files ---
+    print(f"\n[Optional Step] Compute QGIS files and camera position estimation...")
+    #  Need calibration Matrix
+    calibration_matrix = get_calibration_matrix(camera_intrinsics)
+    #  Need list of dict for the QGIS files
+    list_dict_pos_estimation = []
+    list_dict_pos_fov = []
+    # Saving dir
+    qgis_saving_dir = working_dir / 'QGIS_files'
+    qgis_saving_dir.mkdir(exist_ok=True, parents=True)
+    #  Compute also the mean error of positional estimation of the camera as validation of the pipeline
+    error_estimation_norm = []
+
+    for frame_idx, lat, lon, fov_mercator in filtered_metadata[['FrameNumber', 'Latitude', 'Longitude', 'fov_mercator']].values:
+        # Retrieve the position of the camera with PnP algorithm
+        pose_estimation = get_camera_position_robust(image_corners_homogeneous[:, :2],
+                                                     np.array(fov_mercator), calibration_matrix)
+        #  Convert the real position to mercator for computing error of position
+        pos_mercator = convert_wgs84_to_web_mercator([[lat, lon]])[0]
+        error_estimation_norm.append(np.linalg.norm(np.array(pose_estimation)[:2] - np.array(pos_mercator)))
+        #  Convert the estimated position to gps for QGIS functions
+        pose_estimation_gps = convert_mercator_to_wgs84([pose_estimation])[0]
+        #  Update the list of dicts
+        list_dict_pos_estimation.append({"id": frame_idx, "real": (lat, lon),
+                                         "estimated": (pose_estimation_gps[0], pose_estimation_gps[1])})
+        list_dict_pos_fov.append({"id": frame_idx, "pos": (lat, lon), "fov": fov_mercator})
+
+    generate_position_comparison_geojson(list_dict_pos_estimation,
+                                         output_file=qgis_saving_dir / "Estimation_camera_position.geojson")
+    generate_multi_camera_geojson(list_dict_pos_fov,
+                                  output_file=qgis_saving_dir / "fov_position.geojson")
+    mean_error_estimation = np.mean(error_estimation_norm)
+    print(f"\nMean Error of retrieving the camera is {mean_error_estimation}m")
+
     print(f"\nDone! Results in: {working_dir}")
 
 
 if __name__ == '__main__':
     # Configuration
-    VIDEO_PATH = 'data/raw_fights/DJI_202510291612_026_Ajouter-balise4/DJI_20251029161705_0001_V.MP4'
-    OUTPUT_ROOT = 'data/preprocessing_all_corrected'
+    VIDEO_PATH = 'data/raw_fights/DJI_202509271440_017/DJI_20250927144136_0001_V.MP4'
+    OUTPUT_ROOT = 'data/preprocessing'
     CONFIG_FILE = "config/preprocessing/raw_preprocessing_config.yaml"
     API_KEY = "SZ5Q6ilGzFm9Wge4GYp8"  # Be careful not to commit real keys to git!
 
     # Parameters
-    ZOOM_LEVEL = 16
+    ZOOM_LEVEL = 18
     IOU_THRESHOLD = 0.5
     ANGLE_THRESHOLD = 15
 
