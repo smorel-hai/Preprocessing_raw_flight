@@ -53,7 +53,7 @@ def get_lat_lon_alt_from_NED_dep(x, y, z, phi0_deg, lam0_deg, h0):
 
     # In NED, positive Z is down, so we subtract Z from altitude
     h = h0 - z
-    return phi, lam, h
+    return phi.item(), lam.item(), h.item()
 
 
 def process(lat, lon, alt, rel_alt, pitch, yaw, roll, K_coefs, pxl_vectors, scale=(1, 1), verbose=-1):

@@ -34,7 +34,7 @@ def get_best_tile_for_fov(tiff_path, fov_coords, src_crs="EPSG:3857"):
         raw_window = from_bounds(
             minx, miny, maxx, maxy, transform=src.transform)
         safe_window = raw_window.round_offsets(
-            op='floor').round_shape(op='ceil')
+            op='floor').round_lengths(op='ceil')
 
         # Clip window to image bounds
         src_window = Window(0, 0, src.width, src.height)
