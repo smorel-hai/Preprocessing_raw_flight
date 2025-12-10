@@ -20,7 +20,7 @@ def extract_candidate_frames(video_path, output_root, config_path, frames_folder
     """
     Extracts frames from the video based on the delta_frames configuration.
     """
-    print(f"\n[1/6] Starting Video Processing...")
+
     print(f"      Input: {video_path}")
 
     # Load configurations
@@ -51,6 +51,7 @@ def extract_candidate_frames(video_path, output_root, config_path, frames_folder
 def main(video_path, output_root, config_path, api_key, zoom_level, iou_threshold=0.5, angle_threshold=15, frames_folder_name='frames_candidates', verbose=0):
 
     # --- Step 1: Extract Frames from Video ---
+    print(f"\n[1/6] Starting Video Processing...")
     device_config, metadata_df = extract_candidate_frames(video_path, output_root, config_path, frames_folder_name)
 
     # Define working directory for this specific video
