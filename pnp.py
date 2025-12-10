@@ -28,7 +28,7 @@ PNP_SOLVERS = {
 }
 
 
-def get_camera_position_robust(image_points, object_points, camera_matrix, dist_coeffs=None, use_ransac=False, solver_type='SQPNP'):
+def get_camera_position_robust(image_points, object_points, camera_matrix, dist_coeffs=None, solver_type='SQPNP'):
     if dist_coeffs is None:
         dist_coeffs = np.zeros((4, 1))
 
@@ -50,44 +50,27 @@ def get_camera_position_robust(image_points, object_points, camera_matrix, dist_
     #     pnp_flag = cv2.SOLVEPNP_IPPE
 
     try:
-        if use_ransac:
-            success, rvec, tvec, inliners = cv2.solvePnPRansac(
-                local_object_points,
-                image_points,
-                camera_matrix,
-                dist_coeffs,
-                flags=pnp_flag
-            )
-        else:
-            inliners = local_object_points
-            success, rvec, tvec = cv2.solvePnP(
-                local_object_points,
-                image_points,
-                camera_matrix,
-                dist_coeffs,
-                flags=pnp_flag
-            )
+
+        success, rvec, tvec = cv2.solvePnP(
+            local_object_points,
+            image_points,
+            camera_matrix,
+            dist_coeffs,
+            flags=pnp_flag
+        )
+
     except cv2.error:
         # Fallback for older OpenCV versions or if SQPNP fails
         print("SQPNP/IPPE failed. Retrying with EPNP...")
         pnp_flag = cv2.SOLVEPNP_EPNP
-        if use_ransac:
-            success, rvec, tvec, inliners = cv2.solvePnPRansac(
-                local_object_points,
-                image_points,
-                camera_matrix,
-                dist_coeffs,
-                flags=pnp_flag
-            )
-        else:
-            inliners = local_object_points
-            success, rvec, tvec = cv2.solvePnP(
-                local_object_points,
-                image_points,
-                camera_matrix,
-                dist_coeffs,
-                flags=pnp_flag
-            )
+
+        success, rvec, tvec = cv2.solvePnP(
+            local_object_points,
+            image_points,
+            camera_matrix,
+            dist_coeffs,
+            flags=pnp_flag
+        )
 
     if not success:
         raise ValueError("PnP solution failed to converge.")
@@ -100,7 +83,7 @@ def get_camera_position_robust(image_points, object_points, camera_matrix, dist_
     camera_position = -np.matrix(rmat).T @ np.matrix(tvec)
     camera_position_global = camera_position.A1 + centroid
 
-    return camera_position_global
+    return camera_position_global, rvec
 
 
 # --- TEST ---
@@ -120,7 +103,5 @@ if __name__ == '__main__':
 
     image_pts = np.array([[0, 0], [W, 0], [0, H], [W, H]], dtype=np.float32)
 
-    pos, rot, used_flag = get_camera_position_robust(image_pts, mercator_pts, K)
-
-    print(f"Solver used: {used_flag}")
+    pos, rot = get_camera_position_robust(image_pts, mercator_pts, K)
     print(f"Camera Position: {pos}")

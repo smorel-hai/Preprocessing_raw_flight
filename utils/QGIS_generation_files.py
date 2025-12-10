@@ -1,6 +1,6 @@
 import json
 import math
-from utils.utils import convert_mercator_to_wgs84
+from preprocessing_rawflight_pipeline.utils.utils import convert_mercator_to_wgs84
 
 # --- Predefined symbols supported by most GeoJSON viewers (SimpleStyle) ---
 # We will cycle through these for different cameras
