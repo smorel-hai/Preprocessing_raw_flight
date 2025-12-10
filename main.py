@@ -7,7 +7,7 @@ import shutil
 # Custom module imports
 from crotalinae_pg.data_preprocessing.raw.video_processor import VideoProcessor
 from crotalinae_pg.data_preprocessing.raw.utils.devices import load_device_config
-from retrieve_position_from_UAV_view import process as calculate_fov_coords, get_R as get_rotation_matrix, get_calibration_matrix
+from retrieve_position_from_UAV_view import compute_frames_fov, get_calibration_matrix
 from retreieve_satellite_image_depending_on_coord import download_tiles, get_bounding_box, merge_tiles_to_geotiff
 from pruning_tile import prune_redundant_areas_with_rotation
 from extract_satellite_tile_from_drone_view import get_best_tile_for_fov, save_tile_to_disk
@@ -64,48 +64,8 @@ def main(video_path, output_root, config_path, api_key, zoom_level, iou_threshol
     camera_intrinsics = device_config.cameras.get('EO').intrinsic_settings.K_coefs
     img_width, img_height = device_config.cameras.get('EO').intrinsic_settings.image_size
 
-    # Define the 4 corners of the image in pixel coordinates (Homogeneous coords)
-    # Top-Left, Top-Right, Bottom-Left, Bottom-Right : Need to have W -1.
-    image_corners_homogeneous = np.array([
-        [0, 0, 1],
-        [img_width - 1, 0, 1],
-        [0, img_height - 1, 1],
-        [img_width - 1, img_height - 1, 1]
-    ])
-
-    fov_wgs84_list = []      # Will store 4 corner points (Lat/Lon) for each frame
-    rotation_matrix_list = []  # Will store camera rotation matrix for each frame
-
-    # Track min/max coordinates to know which satellite area to download later
-    global_max_lat, global_min_lat = -np.inf, np.inf
-    global_max_lon, global_min_lon = -np.inf, np.inf
-
-    # Iterate through every extracted frame
-    for index, row in metadata_df.iterrows():
-        # Extract telemetry
-        lat, lon = row["Latitude"], row['Longitude']
-        alt, rel_alt = row['Absolute Altitude'], row['Relative Altitude']
-        pitch, yaw, roll = row['Gimbal Pitch'], row['Gimbal Yaw'], row['Gimbal Roll']
-
-        # 1. Project image corners to the ground (WGS84 Coordinates)
-        fov_coords = calculate_fov_coords(
-            lat, lon, alt, rel_alt,
-            pitch, yaw, roll,
-            camera_intrinsics, image_corners_homogeneous
-        )
-        fov_wgs84_list.append(fov_coords)
-
-        # 2. Calculate Rotation Matrix (for viewing angle pruning)
-        r_mat = get_rotation_matrix(pitch, yaw, roll)
-        rotation_matrix_list.append(r_mat)
-
-        # 3. Update Global Bounding Box
-        for point in fov_coords:
-            p_lat, p_lon = point[:2]
-            global_max_lat = max(p_lat, global_max_lat)
-            global_min_lat = min(p_lat, global_min_lat)
-            global_max_lon = max(p_lon, global_max_lon)
-            global_min_lon = min(p_lon, global_min_lon)
+    fov_wgs84_list, rotation_matrix_list, global_bouding_box = compute_frames_fov(
+        metadata_df, img_width, img_height, camera_intrinsics)
 
     # Store results back in dataframe
     metadata_df['fov_wgs84'] = fov_wgs84_list
@@ -114,10 +74,7 @@ def main(video_path, output_root, config_path, api_key, zoom_level, iou_threshol
     print(f"\n[3/6] Downloading Satellite Imagery...")
 
     # Calculate the North-West and South-East corners for the tile downloader
-    nw_corner, se_corner = get_bounding_box(
-        (global_min_lat, global_min_lon),
-        (global_max_lat, global_max_lon)
-    )
+    nw_corner, se_corner = get_bounding_box(*global_bouding_box)
 
     satellite_download_dir = working_dir / f"Tiles_z{zoom_level}"
     tiles_storage_dir = satellite_download_dir / 'zone_tiles'

@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def get_R(pitch, yaw, roll):
+def get_rotation_matrix(pitch, yaw, roll):
     """
     Returns the Rotation Matrix from Body Frame to NED Frame.
     Order: Yaw -> Pitch -> Roll (Standard Aerospace)
@@ -69,7 +69,7 @@ def get_calibration_matrix(K_coefs, scale=(1, 1)):
 def process(lat, lon, alt, rel_alt, pitch, yaw, roll, K_coefs, pxl_vectors, scale=(1, 1), verbose=-1):
     # 1. Get Rotation Matrix (Body -> NED)
     # Note: Ensure pitch/roll/yaw match the drone's IMU frame (Nose Forward)
-    R_body_to_ned = get_R(pitch, yaw, roll)
+    R_body_to_ned = get_rotation_matrix(pitch, yaw, roll)
     K = get_calibration_matrix(K_coefs, scale)
 
     # 3. Define Pixel Vectors (Homogeneous)
@@ -122,6 +122,54 @@ def process(lat, lon, alt, rel_alt, pitch, yaw, roll, K_coefs, pxl_vectors, scal
         points_vectors_Q_coord.append([phi, lam, h])
 
     return points_vectors_Q_coord
+
+
+def compute_frames_fov(metadata_df, img_width, img_height, camera_intrinsics):
+
+    # Define the 4 corners of the image in pixel coordinates (Homogeneous coords)
+    # Top-Left, Top-Right, Bottom-Left, Bottom-Right : Need to have W -1.
+    image_corners_homogeneous = np.array([
+        [0, 0, 1],
+        [img_width - 1, 0, 1],
+        [0, img_height - 1, 1],
+        [img_width - 1, img_height - 1, 1]
+    ])
+
+    fov_wgs84_list = []      # Will store 4 corner points (Lat/Lon) for each frame
+    rotation_matrix_list = []  # Will store camera rotation matrix for each frame
+
+    # Track min/max coordinates to know which satellite area to download later
+    global_max_lat, global_min_lat = -np.inf, np.inf
+    global_max_lon, global_min_lon = -np.inf, np.inf
+
+    # Iterate through every extracted frame
+    for index, row in metadata_df.iterrows():
+        # Extract telemetry
+        lat, lon = row["Latitude"], row['Longitude']
+        alt, rel_alt = row['Absolute Altitude'], row['Relative Altitude']
+        pitch, yaw, roll = row['Gimbal Pitch'], row['Gimbal Yaw'], row['Gimbal Roll']
+
+        # 1. Project image corners to the ground (WGS84 Coordinates)
+        fov_coords = process(
+            lat, lon, alt, rel_alt,
+            pitch, yaw, roll,
+            camera_intrinsics, image_corners_homogeneous
+        )
+        fov_wgs84_list.append(fov_coords)
+
+        # 2. Calculate Rotation Matrix (for viewing angle pruning)
+        r_mat = get_rotation_matrix(pitch, yaw, roll)
+        rotation_matrix_list.append(r_mat)
+
+        # 3. Update Global Bounding Box
+        for point in fov_coords:
+            p_lat, p_lon = point[:2]
+            global_max_lat = max(p_lat, global_max_lat)
+            global_min_lat = min(p_lat, global_min_lat)
+            global_max_lon = max(p_lon, global_max_lon)
+            global_min_lon = min(p_lon, global_min_lon)
+
+    return fov_wgs84_list, rotation_matrix_list, [[global_min_lat, global_min_lon], [global_max_lat, global_max_lon]]
 
 
 # --- usage example ---
