@@ -48,7 +48,7 @@ def extract_candidate_frames(video_path, output_root, config_path, frames_folder
     return device_config, telemetry_metadata
 
 
-def main(video_path, output_root, config_path, api_key, zoom_level, iou_threshold=0.5, angle_threshold=15, frames_folder_name='frames_candidates'):
+def main(video_path, output_root, config_path, api_key, zoom_level, iou_threshold=0.5, angle_threshold=15, frames_folder_name='frames_candidates', verbose=0):
 
     # --- Step 1: Extract Frames from Video ---
     device_config, metadata_df = extract_candidate_frames(video_path, output_root, config_path, frames_folder_name)
@@ -193,41 +193,42 @@ def main(video_path, output_root, config_path, api_key, zoom_level, iou_threshol
 
     print(f"      Successfully saved {count} satellite crops.")
 
-    # --- Step Optional: Compute retrieval of camera position and QGIS files ---
-    print(f"\n[Optional Step] Compute QGIS files and camera position estimation...")
-    #  Need calibration Matrix
-    calibration_matrix = get_calibration_matrix(camera_intrinsics)
-    #  Need list of dict for the QGIS files
-    list_dict_pos_estimation = []
-    list_dict_pos_fov = []
-    # Saving dir
-    qgis_saving_dir = working_dir / 'QGIS_files'
-    qgis_saving_dir.mkdir(exist_ok=True, parents=True)
-    #  Compute also the mean error of positional estimation of the camera as validation of the pipeline
-    error_estimation_norm = []
+    if verbose > 0:
+        # --- Step Optional: Compute retrieval of camera position and QGIS files ---
+        print(f"\n[Optional Step] Compute QGIS files and camera position estimation...")
+        #  Need calibration Matrix
+        calibration_matrix = get_calibration_matrix(camera_intrinsics)
+        #  Need list of dict for the QGIS files
+        list_dict_pos_estimation = []
+        list_dict_pos_fov = []
+        # Saving dir
+        qgis_saving_dir = working_dir / 'QGIS_files'
+        qgis_saving_dir.mkdir(exist_ok=True, parents=True)
+        #  Compute also the mean error of positional estimation of the camera as validation of the pipeline
+        error_estimation_norm = []
 
-    for frame_idx, lat, lon, fov_mercator in filtered_metadata[['FrameNumber', 'Latitude', 'Longitude', 'fov_mercator']].values:
-        # Retrieve the position of the camera with PnP algorithm
-        pose_estimation = get_camera_position_robust(image_corners_homogeneous[:, :2],
-                                                     np.array(fov_mercator), calibration_matrix)
-        #  Convert the real position to mercator for computing error of position
-        pos_mercator = convert_wgs84_to_web_mercator([[lat, lon]])[0]
-        error_estimation_norm.append(np.linalg.norm(np.array(pose_estimation)[:2] - np.array(pos_mercator)))
-        #  Convert the estimated position to gps for QGIS functions
-        pose_estimation_gps = convert_mercator_to_wgs84([pose_estimation])[0]
-        #  Update the list of dicts
-        list_dict_pos_estimation.append({"id": frame_idx, "real": (lat, lon),
-                                         "estimated": (pose_estimation_gps[0], pose_estimation_gps[1])})
-        list_dict_pos_fov.append({"id": frame_idx, "pos": (lat, lon), "fov": fov_mercator})
+        for frame_idx, lat, lon, fov_mercator in filtered_metadata[['FrameNumber', 'Latitude', 'Longitude', 'fov_mercator']].values:
+            # Retrieve the position of the camera with PnP algorithm
+            pose_estimation = get_camera_position_robust(image_corners_homogeneous[:, :2],
+                                                         np.array(fov_mercator), calibration_matrix)
+            #  Convert the real position to mercator for computing error of position
+            pos_mercator = convert_wgs84_to_web_mercator([[lat, lon]])[0]
+            error_estimation_norm.append(np.linalg.norm(np.array(pose_estimation)[:2] - np.array(pos_mercator)))
+            #  Convert the estimated position to gps for QGIS functions
+            pose_estimation_gps = convert_mercator_to_wgs84([pose_estimation])[0]
+            #  Update the list of dicts
+            list_dict_pos_estimation.append({"id": frame_idx, "real": (lat, lon),
+                                            "estimated": (pose_estimation_gps[0], pose_estimation_gps[1])})
+            list_dict_pos_fov.append({"id": frame_idx, "pos": (lat, lon), "fov": fov_mercator})
 
-    generate_position_comparison_geojson(list_dict_pos_estimation,
-                                         output_file=qgis_saving_dir / "Estimation_camera_position.geojson")
-    generate_multi_camera_geojson(list_dict_pos_fov,
-                                  output_file=qgis_saving_dir / "fov_position.geojson")
-    mean_error_estimation = np.mean(error_estimation_norm)
-    print(f"\nMean Error of retrieving the camera is {mean_error_estimation}m")
+        generate_position_comparison_geojson(list_dict_pos_estimation,
+                                             output_file=qgis_saving_dir / "Estimation_camera_position.geojson")
+        generate_multi_camera_geojson(list_dict_pos_fov,
+                                      output_file=qgis_saving_dir / "fov_position.geojson")
+        mean_error_estimation = np.mean(error_estimation_norm)
+        print(f"\nMean Error of retrieving the camera is {mean_error_estimation}m")
 
-    print(f"\nDone! Results in: {working_dir}")
+        print(f"\nDone! Results in: {working_dir}")
 
 
 if __name__ == '__main__':
@@ -241,6 +242,7 @@ if __name__ == '__main__':
     ZOOM_LEVEL = 18
     IOU_THRESHOLD = 0.5
     ANGLE_THRESHOLD = 15
+    VERBOSE = 1
 
     main(
         VIDEO_PATH,
@@ -249,5 +251,6 @@ if __name__ == '__main__':
         API_KEY,
         ZOOM_LEVEL,
         iou_threshold=IOU_THRESHOLD,
-        angle_threshold=ANGLE_THRESHOLD
+        angle_threshold=ANGLE_THRESHOLD,
+        verbose=VERBOSE
     )
