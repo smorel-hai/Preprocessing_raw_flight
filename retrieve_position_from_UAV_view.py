@@ -84,11 +84,11 @@ def process(lat, lon, alt, rel_alt, pitch, yaw, roll, K_coefs, pxl_vectors, scal
     # Camera: Z is Forward, X is Right, Y is Down
     # Body (NED): X is Forward, Y is Right, Z is Down
     # Transform: X_body = Z_cam, Y_body = X_cam, Z_body = Y_cam
-    T_cam_to_body = np.array([[0, 0, 1],
+    R_cam_to_body = np.array([[0, 0, 1],
                               [1, 0, 0],
                               [0, 1, 0]])
 
-    dir_vectors_body = T_cam_to_body @ dir_vectors_cam
+    dir_vectors_body = R_cam_to_body @ dir_vectors_cam
 
     # 6. Transform Body Frame to NED Frame
     # Use R, not inv(R), because we are projecting OUT to the world

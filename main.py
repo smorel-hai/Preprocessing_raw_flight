@@ -51,11 +51,11 @@ def extract_candidate_frames(video_path, output_root, config_path, frames_folder
 def main(video_path, output_root, config_path, api_key, zoom_level, iou_threshold=0.5, angle_threshold=15, frames_folder_name='frames_candidates', verbose=0):
 
     # --- Step 1: Extract Frames from Video ---
-    print(f"\n[1/6] Starting Video Processing...")
-    device_config, metadata_df = extract_candidate_frames(video_path, output_root, config_path, frames_folder_name)
 
     # Define working directory for this specific video
     working_dir = Path(output_root) / Path(video_path).stem
+    print(f"\n[1/6] Starting Video Processing...")
+    device_config, metadata_df = extract_candidate_frames(video_path, working_dir, config_path, frames_folder_name)
 
     # --- Step 2: Prepare Camera Geometry ---
     print(f"\n[2/6] Calculating Field of View (FOV) for all frames...")
@@ -154,6 +154,12 @@ def main(video_path, output_root, config_path, api_key, zoom_level, iou_threshol
     if verbose > 0:
         # --- Step Optional: Compute retrieval of camera position and QGIS files ---
         print(f"\n[Optional Step] Compute QGIS files and camera position estimation...")
+        image_corners_homogeneous = np.array([
+            [0, 0, 1],
+            [img_width - 1, 0, 1],
+            [0, img_height - 1, 1],
+            [img_width - 1, img_height - 1, 1]
+        ])
         #  Need calibration Matrix
         calibration_matrix = get_calibration_matrix(camera_intrinsics)
         #  Need list of dict for the QGIS files
@@ -167,8 +173,8 @@ def main(video_path, output_root, config_path, api_key, zoom_level, iou_threshol
 
         for frame_idx, lat, lon, fov_mercator in filtered_metadata[['FrameNumber', 'Latitude', 'Longitude', 'fov_mercator']].values:
             # Retrieve the position of the camera with PnP algorithm
-            pose_estimation = get_camera_position_robust(image_corners_homogeneous[:, :2],
-                                                         np.array(fov_mercator), calibration_matrix)
+            pose_estimation, rec = get_camera_position_robust(image_corners_homogeneous[:, :2],
+                                                              np.array(fov_mercator), calibration_matrix)
             #  Convert the real position to mercator for computing error of position
             pos_mercator = convert_wgs84_to_web_mercator([[lat, lon]])[0]
             error_estimation_norm.append(np.linalg.norm(np.array(pose_estimation)[:2] - np.array(pos_mercator)))
