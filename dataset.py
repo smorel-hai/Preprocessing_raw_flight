@@ -165,11 +165,11 @@ class Dataset:
         zone_bbox_list = []
         zone_name_list = []
         for zone_name, zone_val in self.metadata[selected_region]['zones'].items():
-            zone_bbox_list.append(zone_val["bbox"])
+            zone_bbox_list.append(zone_val["bbox_wgs84"])
             zone_name_list.append(zone_name)
         return zone_bbox_list, zone_name_list
 
-    def extract_candidate_frames(self, video_path: Path, output_root: Path):
+    def extract_candidate_frames(self, video_path: Path, output_root: Path, output_folder_name: str = 'frames'):
         """
         Extracts frames from the video based on the delta_frames configuration.
         """
@@ -177,7 +177,7 @@ class Dataset:
         print(f"      Input: {video_path}")
 
         # Load configurations
-        config_data = safe_load(open(self.config_path))
+        config_data = safe_load(open(self.config_file))
         device_config = load_device_config(
             config_data["device"]["config_path"],
             config_data["device"]["id"]
@@ -192,7 +192,7 @@ class Dataset:
         )
 
         # Run extraction
-        video_processor.process(video_path, "frames")
+        video_processor.process(video_path, output_folder_name)
 
         # Retrieve the dataframe containing telemetry (Lat, Lon, Yaw, Pitch, etc.)
         telemetry_metadata = video_processor.frame_saver.metadata
@@ -206,6 +206,7 @@ class Dataset:
 
         corresponding_zone_name = zone_bbox.mercator_name()
         #  Initialize new zone in metadata
+        self.metadata[region_name]['zones'][corresponding_zone_name] = {}
         self.metadata[region_name]['zones'][corresponding_zone_name]['drone'] = {}
         self.metadata[region_name]['zones'][corresponding_zone_name]['satellite'] = {}
         self.metadata[region_name]['zones'][corresponding_zone_name]['bbox_wgs84'] = zone_bbox.get_wgs84_bbox()
@@ -217,7 +218,9 @@ class Dataset:
         # --- Step 1: Extract Frames from Video ---
         print(f"\n[1/6] Starting Video Processing...")
         tmp_dir = self.root_dir / '.tmp' / video_path.stem
-        device_config, frames_metadata = self.extract_candidate_frames(video_path, tmp_dir)
+        tmp_dir_folder_name = 'frames'
+        device_config, frames_metadata = self.extract_candidate_frames(
+            video_path, tmp_dir, output_folder_name=tmp_dir_folder_name)
 
         # --- Step 2: Prepare Camera Geometry ---
         print(f"\n[2/6] Calculating Field of View (FOV) for all frames...")
@@ -252,7 +255,7 @@ class Dataset:
             rotation_matrix_list,
             guide_coords_list=guide_coords_list_mercator,
             max_areas_to_keep=len(frames_metadata),  # Initially allow all, let threshold decide
-            iou_threshold=self.iou_threshold,
+            redundancy_iou_threshold=self.iou_threshold,
             angle_threshold_degrees=self.angle_threshold
         )
 
@@ -267,7 +270,7 @@ class Dataset:
         for frame_indice, corresponding_zone_idx in guided_matches_output.items():
             frame_info = frames_metadata.iloc[frame_indice]
             frame_info_dict = frame_info.to_dict()
-            frame_filename = frame_info.index.values[0]
+            frame_filename = frame_info.name
             frame_zone = oriented_bbox(frame_info_dict['fov_wgs84'])
 
             if corresponding_zone_idx is None:
@@ -275,7 +278,7 @@ class Dataset:
             else:
                 corresponding_zone_name = guide_coords_zone_name[corresponding_zone_idx]
 
-            source_path = tmp_dir / frame_filename
+            source_path = tmp_dir / tmp_dir_folder_name / frame_filename
             dest_path = save_frame_dir / frame_filename
             if source_path.exists():
                 shutil.copy(source_path, dest_path)
@@ -312,3 +315,4 @@ if __name__ == '__main__':
     api_key = "SZ5Q6ilGzFm9Wge4GYp8"
 
     test_dataset = Dataset(root_dir, video_dir, config_file, margin, zoom, api_key)
+    test_dataset.run_extraction()

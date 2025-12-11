@@ -33,12 +33,10 @@ def get_bounding_box(coordinate_list: List[Tuple[float, float]]) -> Tuple[Tuple[
 class oriented_bbox:
     """
     A class representing a North-aligned Bounding Box defined by geographical coordinates (WGS84).
-    Supports margin expansion, geometric operations (intersection, union), and coordinate projection.
 
     Attributes:
         nw (Tuple[float, float]): The North-West corner (Latitude, Longitude).
         se (Tuple[float, float]): The South-East corner (Latitude, Longitude).
-        margin (float): The percentage margin applied to expand the box (e.g., 0.1 for 10%).
     """
 
     def __init__(self, bbox_wgs_84: List[Tuple[float, float]]):
@@ -48,15 +46,13 @@ class oriented_bbox:
         Args:
             bbox_wgs_84 (List[Tuple[float, float]]): A list of (Lat, Lon) points defining the region.
                 This can be just 2 points (NW, SE) or a polygon of points.
-            margin (float, optional): A percentage to expand the bounding box on all sides.
-                Defaults to 0. Example: 0.1 expands width and height by 10%.
         """
         self.nw, self.se = get_bounding_box(bbox_wgs_84)
         self.nw_mercator, self.se_mercator = convert_wgs84_to_mercator([self.nw, self.se])
 
     def generate_bbox_with_margin(self, margin=0) -> None:
         """
-        Internal method to expand the bounding box dimensions based on `self.margin`.
+        Internal method to expand the bounding box dimensions based on margin.
         Modifies `self.nw` and `self.se` in-place.
         """
         lat_max, lon_min = self.nw
@@ -140,7 +136,7 @@ class oriented_bbox:
             return None
 
         new_coords = [(int_lat_max, int_lon_min), (int_lat_min, int_lon_max)]
-        return oriented_bbox(new_coords, margin=0)
+        return oriented_bbox(new_coords)
 
     def is_contained_in(self, other: 'oriented_bbox') -> bool:
         """
@@ -183,7 +179,7 @@ class oriented_bbox:
         uni_lon_max = max(s_lon_max, o_lon_max)
 
         new_coords = [(uni_lat_max, uni_lon_min), (uni_lat_min, uni_lon_max)]
-        return oriented_bbox(new_coords, margin=0)
+        return oriented_bbox(new_coords)
 
     def mercator_name(self):
         # Cast to integer (truncates decimals) and format string
