@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import shutil
 from yaml import safe_load
-from utils.utils import compute_intersection, convert_wgs84_to_web_mercator, add_percentage_margin_to_bbox, is_bbox_inside, compute_enclosing_box, get_union_of_bboxes, transfer_skip_existing_names
+from utils.utils import compute_intersection, convert_wgs84_to_web_mercator, add_percentage_margin_to_bbox, is_bbox_inside, compute_enclosing_box, get_union_of_bboxes, transfer_skip_existing_names, delete_folder
 from geopy.geocoders import Nominatim
 from retreieve_satellite_image_depending_on_coord import download_tiles, merge_tiles_to_geotiff, get_bounding_box
 from crotalinae_pg.data_preprocessing.raw.video_processor import VideoProcessor
@@ -23,7 +23,7 @@ def get_city_from_point(lat, lon):
 class Region:
     def __init__(self, bbox):
         #  Assure to order the bounding box (nw, se)
-        self.bbox = get_bounding_box(*bbox)
+        self.bbox = get_bounding_box(bbox)
         self._get_name()
         self.tiff_path = None
         self.temp_dir = None
@@ -46,9 +46,8 @@ class Region:
         self.tiff_path = save_path
         self.temp_dir = temp_folder
 
-    def update_bbox(self, new_bbox, api_key, margin, zoom):
+    def update_bbox(self, new_bbox):
         self.bbox = new_bbox
-        self.download_corresponding_tiff_file(self.tiff_path, self.temp_dir, api_key, margin, zoom)
 
 
 class Dataset:
@@ -60,6 +59,7 @@ class Dataset:
         self.config_file = config_file
 
         self.region_dict = {}
+        self.updated_region = set()  #  Usefull for knowing the region that has been updated, that needs to download the global tiff
         self.metadata_json_path = self.root_dir / 'metadata'
         self.load_json()
 
@@ -94,10 +94,12 @@ class Dataset:
         self.metadata[merge_region_name]['zones'] = {}
         for former_name in regions_to_merge_name:
             transfer_skip_existing_names(self.root_dir / former_name, self.root_dir / merge_region_name)
+            delete_folder(self.root_dir / former_name)
             #  update metadata zones with the keys that the new region has not : all the key
             self.metadata[merge_region_name]['zones'] |= self.metadata[former_name]['zones']
-            #  Remove the former_name from the region dict
+            #  Remove the former_name from the region dict and the updated_region
             self.region_dict.pop(former_name)
+            self.updated_region.discard(former_name)
         return merge_region_name
 
     def search_corresponding_region(self, bbox_candidate):
@@ -126,6 +128,7 @@ class Dataset:
                 #  Updated it in the region_dict of the Dataset
                 self.region_dict[corresponding_region_name] = corresponding_region
                 self.metadata[corresponding_region_name]['bbox'] = region_bbox_updated
+                self.updated_region.add(region_bbox_updated)
             return corresponding_region_name
         else:
             if not self.enable_region_merge:
@@ -141,21 +144,29 @@ class Dataset:
             idx += 1
             name_region_in_dict = name_region + f'_{idx}'
 
-        # Download the new region tiff
-        save_path = self.root_dir / name_region_in_dict / 'satellite' / 'Region_view.tiff'
-        temp_dir = self.root_dir / name_region_in_dict / 'satellite' / '.tmp'
-        new_region.download_corresponding_tiff_file(save_path, temp_dir, self.api_key, self.margin, self.zoom)
+        #  Add new region name to tracking objets
         self.region_dict[name_region_in_dict] = new_region
+        self.updated_region.add(name_region_in_dict)
 
         #  Update metadata_json with the new region
-        self.metadata[name_region_in_dict] = {'name': name_region, 'bbox': new_region.bbox}
+        self.metadata[name_region_in_dict] = {'name': name_region, 'bbox': new_region.bbox, "zones": {}}
         return name_region_in_dict
+
+    def download_global_tiff_updated_region(self):
+        for region_name in self.updated_region:
+            #  Download the region tiff
+            save_path = self.root_dir / region_name / 'satellite' / 'Region_view.tiff'
+            temp_dir = self.root_dir / region_name / 'satellite' / '.tmp'
+            self.region_dict[region_name].download_corresponding_tiff_file(
+                save_path, temp_dir, self.api_key, self.margin, self.zoom)
 
     def retrieve_all_zone_from_region(self, selected_region):
         zone_bbox_list = []
-        for zone_val in self.metadata[selected_region]['zones'].values():
+        zone_name_list = []
+        for zone_name, zone_val in self.metadata[selected_region]['zones'].items():
             zone_bbox_list.append(zone_val["bbox"])
-        return zone_bbox_list
+            zone_name_list.append(zone_name)
+        return zone_bbox_list, zone_name_list
 
     def extract_candidate_frames(self, video_path, output_root):
         """
@@ -188,6 +199,13 @@ class Dataset:
         print(f"      Extracted {len(telemetry_metadata)} frames.")
         return device_config, telemetry_metadata
 
+    def create_zone(self, bbox, region_name):
+
+        corresponding_zone_name = ?
+        #  Initialize new zone in metadata
+        self.metadata[region_name]['zones'][corresponding_zone_name]['drone'] = {}
+        self.metadata[region_name]['zones'][corresponding_zone_name]['satellite'] = {}
+
     def process_video(self, video_path, fly_name):
         # --- Step 1: Extract Frames from Video ---
         print(f"\n[1/6] Starting Video Processing...")
@@ -213,16 +231,16 @@ class Dataset:
         # --- Step 3: Download Satellite Imagery ---
         print(f"\n[3/6] Retrieve corresponding Region")
         # Calculate the North-West and South-East corners for the tile downloader
-        nw_corner, se_corner = get_bounding_box(*global_bouding_box)
+        nw_corner, se_corner = get_bounding_box(global_bouding_box)
         corresponding_region_name = self.search_corresponding_region([nw_corner, se_corner])
 
         # --- Step 4: Prune Redundant Frames ---
         print(f"\n[4/6] Pruning Redundant Frames...")
 
-        guide_coords_list_gps = self.retrieve_all_zone_from_region(corresponding_region_name)
+        guide_coords_list_gps, guide_coords_zone_name = self.retrieve_all_zone_from_region(corresponding_region_name)
         guide_coords_list_mercator = [convert_wgs84_to_web_mercator(coords) for coords in guide_coords_list_gps]
 
-        guided_matches_output, standard_matches_output = prune_redundant_areas_with_rotation(
+        guided_matches_output = prune_redundant_areas_with_rotation(
             frames_metadata['fov_mercator'],
             rotation_matrix_list,
             guide_coords_list=guide_coords_list_mercator,
@@ -232,15 +250,21 @@ class Dataset:
         )
 
         # --- Step 5: Save Filtered Results ---
-        print(f"\n[5/6] Dealing with selected Frames in known zone...")
+        print(f"\n[5/6] Dealing with selected Frames ...")
 
         working_dir = self.root_dir / corresponding_region_name
 
         save_frame_dir = working_dir / 'drone' / fly_name
         save_frame_dir.mkdir(exist_ok=True, parents=True)
 
-        for frame_indice, corresponding_zone in guided_matches_output.items():
+        for frame_indice, corresponding_zone_idx in guided_matches_output.items():
+            if corresponding_zone_idx is None:
+
+            else:
+                corresponding_zone_name = guide_coords_zone_name[corresponding_zone_idx]
+
             frame_info = frames_metadata.iloc[frame_indice]
+            frame_info_dict = frame_info.to_dict()
             frame_filename = frame_info.index.values[0]
 
             source_path = tmp_dir / frame_filename
@@ -250,8 +274,11 @@ class Dataset:
             else:
                 print(f"      Warning: Source file missing {source_path}")
 
-            # TODO: update the metadata json to add all info about the drone in the new source
-
+            id_drone = dest_path.stem
+            info_image_dict = {'image_path': str(dest_path),
+                               'fly_id': fly_name}
+            info_image_dict |= frame_info_dict
+            self.metadata[corresponding_region_name]['zones'][corresponding_zone_name]['drone'][id_drone] = info_image_dict
         # --- Step 6: Extract Matching Satellite Tiles ---
         print(f"\n[6/6] Generating new zones from the remaining selected frames")
 

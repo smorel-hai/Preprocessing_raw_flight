@@ -245,7 +245,7 @@ def get_euler_angles_scipy(R_matrix):
 
 def transfer_skip_existing_names(source_folder, target_folder):
     """
-    Recursively copies files from source to target using pathlib.
+    Recursively moves files from source to target using pathlib.
     Skips files if the name already exists in the destination.
     """
     # Convert strings to Path objects
@@ -279,8 +279,8 @@ def transfer_skip_existing_names(source_folder, target_folder):
                 dest_file.parent.mkdir(parents=True, exist_ok=True)
 
                 try:
-                    shutil.copy2(src_file, dest_file)
-                    print(f"[COPY] {dest_file.name}")
+                    src_file.rename(dest_file)
+                    print(f"[MOVE] {dest_file.name}")
                     files_copied += 1
                 except Exception as e:
                     print(f"[ERROR] {src_file.name}: {e}")
@@ -288,3 +288,28 @@ def transfer_skip_existing_names(source_folder, target_folder):
     print(f"\n--- Done ---")
     print(f"Copied:  {files_copied}")
     print(f"Skipped: {files_skipped}")
+
+
+def delete_folder(folder_path):
+    """
+    Deletes a folder and all its contents.
+    """
+    target = Path(folder_path)
+
+    # 1. Check if the folder actually exists
+    if not target.exists():
+        print(f"[Error] The folder '{folder_path}' does not exist.")
+        return
+
+    # 2. Check if it is actually a directory (not a file)
+    if not target.is_dir():
+        print(f"[Error] '{folder_path}' is a file, not a folder.")
+        return
+
+    # 3. Attempt to delete
+    try:
+        # shutil.rmtree is the function that handles recursive deletion
+        shutil.rmtree(target)
+        print(f"[Success] Deleted folder: {folder_path}")
+    except OSError as e:
+        print(f"[Error] Failed to delete {folder_path}. Reason: {e}")

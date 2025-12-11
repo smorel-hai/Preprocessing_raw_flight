@@ -91,7 +91,6 @@ def prune_redundant_areas_with_rotation(
 
     all_kept_items = []
     guided_matches_output = {}
-    standard_matches_output = []
 
     # Track IDs that were found totally inside guides (Winners AND Losers)
     # These will be strictly excluded from Phase 2
@@ -160,12 +159,9 @@ def prune_redundant_areas_with_rotation(
 
         if not is_redundant:
             all_kept_items.append(current)
-            standard_matches_output.append(current['id'])
+            guided_matches_output[current['id']] = None
 
-    # --- 5. Output ---
-    standard_matches_output.sort()
-
-    return guided_matches_output, standard_matches_output
+    return guided_matches_output
 
 # --- Example Usage ---
 
