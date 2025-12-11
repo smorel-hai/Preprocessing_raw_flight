@@ -41,7 +41,7 @@ class oriented_bbox:
         margin (float): The percentage margin applied to expand the box (e.g., 0.1 for 10%).
     """
 
-    def __init__(self, bbox_wgs_84: List[Tuple[float, float]], margin: float = 0):
+    def __init__(self, bbox_wgs_84: List[Tuple[float, float]]):
         """
         Initializes the bounding box from a list of coordinates.
 
@@ -52,12 +52,9 @@ class oriented_bbox:
                 Defaults to 0. Example: 0.1 expands width and height by 10%.
         """
         self.nw, self.se = get_bounding_box(bbox_wgs_84)
-        self.margin = margin
+        self.nw_mercator, self.se_mercator = convert_wgs84_to_mercator([self.nw, self.se])
 
-        if self.margin != 0:
-            self._apply_margin()
-
-    def _apply_margin(self) -> None:
+    def generate_bbox_with_margin(self, margin=0) -> None:
         """
         Internal method to expand the bounding box dimensions based on `self.margin`.
         Modifies `self.nw` and `self.se` in-place.
@@ -67,11 +64,29 @@ class oriented_bbox:
         height = lat_max - lat_min
         width = lon_max - lon_min
 
-        lat_pad = height * self.margin
-        lon_pad = width * self.margin
+        lat_pad = height * margin
+        lon_pad = width * margin
 
-        self.nw = (lat_max + lat_pad, lon_min - lon_pad)
-        self.se = (lat_min - lat_pad, lon_max + lon_pad)
+        nw = (lat_max + lat_pad, lon_min - lon_pad)
+        se = (lat_min - lat_pad, lon_max + lon_pad)
+
+        return oriented_bbox([nw, se])
+
+    @property
+    def center(self) -> Tuple[float, float]:
+        """
+        Calculates the geometric center (centroid) of the bounding box.
+
+        Returns:
+            Tuple[float, float]: The (Latitude, Longitude) of the center point.
+        """
+        # Average of Top and Bottom Latitudes
+        center_lat = (self.nw[0] + self.se[0]) / 2.0
+
+        # Average of Left and Right Longitudes
+        center_lon = (self.nw[1] + self.se[1]) / 2.0
+
+        return center_lat, center_lon
 
     def get_wgs84_bbox(self) -> List[Tuple[float, float]]:
         """
@@ -169,6 +184,13 @@ class oriented_bbox:
 
         new_coords = [(uni_lat_max, uni_lon_min), (uni_lat_min, uni_lon_max)]
         return oriented_bbox(new_coords, margin=0)
+
+    def mercator_name(self):
+        # Cast to integer (truncates decimals) and format string
+        # Using int() removes the decimal point entirely (e.g. 123.45 -> 123)
+        x1, y1 = self.nw_mercator
+        x2, y2 = self.se_mercator
+        return f"{int(x1)}-{int(y1)}-{int(x2)}-{int(y2)}"
 
     def __repr__(self):
         return f"oriented_bbox(NW={self.nw}, SE={self.se})"

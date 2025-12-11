@@ -13,7 +13,7 @@ from pruning_tile import prune_redundant_areas_with_rotation
 from extract_satellite_tile_from_drone_view import get_best_tile_for_fov, save_tile_to_disk
 from pnp import get_camera_position_robust
 from utils.QGIS_generation_files import generate_multi_camera_geojson, generate_position_comparison_geojson
-from utils.utils import convert_wgs84_to_web_mercator, convert_mercator_to_wgs84
+from utils.utils import convert_wgs84_to_mercator, convert_mercator_to_wgs84
 
 
 def extract_candidate_frames(video_path, output_root, config_path, frames_folder_name):
@@ -92,7 +92,7 @@ def main(video_path, output_root, config_path, api_key, zoom_level, iou_threshol
     print(f"\n[4/6] Pruning Redundant Frames...")
 
     # Convert FOV coordinates to Web Mercator (Meters) for accurate area calculation
-    metadata_df['fov_mercator'] = [convert_wgs84_to_web_mercator(coords) for coords in metadata_df['fov_wgs84']]
+    metadata_df['fov_mercator'] = [convert_wgs84_to_mercator(coords) for coords in metadata_df['fov_wgs84']]
 
     # Save updated metadata before pruning
     metadata_df.to_csv(working_dir / frames_folder_name / "metadata_fov.csv")
