@@ -5,6 +5,7 @@ import io
 import re
 import numpy as np
 from PIL import Image, UnidentifiedImageError
+from utils.utils import get_bounding_box
 
 # Geospatial libraries (Required for stitching)
 import rasterio
@@ -17,26 +18,6 @@ Image.MAX_IMAGE_PIXELS = None
 R = 6378137
 MAX_METERS = 2 * math.pi * R
 ORIGIN_SHIFT = MAX_METERS / 2.0
-
-
-def get_bounding_box(point1, point2):
-    """
-    Takes two arbitrary points and returns the North-West and South-East 
-    corners required to create a North-aligned bounding box.
-    """
-    lat1, lon1 = point1
-    lat2, lon2 = point2
-
-    # Find the extremes
-    max_lat = max(lat1, lat2)  # North
-    min_lat = min(lat1, lat2)  # South
-    max_lon = max(lon1, lon2)  # East
-    min_lon = min(lon1, lon2)  # West
-
-    nw_corner = (max_lat, min_lon)
-    se_corner = (min_lat, max_lon)
-
-    return nw_corner, se_corner
 
 
 def lat_lon_to_tile(lat, lon, zoom):
@@ -251,7 +232,7 @@ if __name__ == "__main__":
     p2 = (48.698000, 2.029500)
 
     ZOOM_LEVEL = 19
-    nw_corner, se_corner = get_bounding_box(p1, p2)
+    nw_corner, se_corner = get_bounding_box([p1, p2])
 
     # Step 1: Download
     download_tiles(

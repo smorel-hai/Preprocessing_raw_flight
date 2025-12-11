@@ -74,7 +74,7 @@ def main(video_path, output_root, config_path, api_key, zoom_level, iou_threshol
     print(f"\n[3/6] Downloading Satellite Imagery...")
 
     # Calculate the North-West and South-East corners for the tile downloader
-    nw_corner, se_corner = get_bounding_box(*global_bouding_box)
+    nw_corner, se_corner = get_bounding_box(global_bouding_box)
 
     satellite_download_dir = working_dir / f"Tiles_z{zoom_level}"
     tiles_storage_dir = satellite_download_dir / 'zone_tiles'

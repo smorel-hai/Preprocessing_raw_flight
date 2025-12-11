@@ -1,172 +1,204 @@
+from typing import List, Tuple, Optional
+import math
 from scipy.spatial.transform import Rotation as R_scipy
 from rasterio.warp import transform
 import numpy as np
 from pathlib import Path
 import shutil
+from typing import List
 
 
-def get_union_of_bboxes(bbox_list):
+def get_bounding_box(coordinate_list: List[Tuple[float, float]]) -> Tuple[Tuple[float, float], Tuple[float, float]]:
     """
-    Computes the smallest bounding box that contains all boxes in the list.
+    Computes the North-West and South-East corners of a North-aligned bounding box
+    that encloses the given set of coordinates.
 
-    :param bbox_list: List of tuples [ (nw, se), (nw, se), ... ]
-                      where nw=(lat_max, lon_min) and se=(lat_min, lon_max)
-    :return: Tuple (nw_union, se_union) or None if list is empty
+    Args:
+        coordinate_list (List[Tuple[float, float]]): A list of (Latitude, Longitude) points.
+
+    Returns:
+        Tuple[Tuple[float, float], Tuple[float, float]]: A tuple containing:
+            - NW corner (lat_max, lon_min)
+            - SE corner (lat_min, lon_max)
+    """
+    coordinate_array = np.array(coordinate_list)
+    lats = coordinate_array[:, 0]
+    lons = coordinate_array[:, 1]
+
+    max_lat = np.max(lats)
+    min_lat = np.min(lats)
+    max_lon = np.max(lons)
+    min_lon = np.min(lons)
+
+    nw_corner = (max_lat, min_lon)
+    se_corner = (min_lat, max_lon)
+    return nw_corner, se_corner
+
+
+class oriented_bbox:
+    """
+    A class representing a North-aligned Bounding Box defined by geographical coordinates (WGS84).
+    Supports margin expansion, geometric operations (intersection, union), and coordinate projection.
+
+    Attributes:
+        nw (Tuple[float, float]): The North-West corner (Latitude, Longitude).
+        se (Tuple[float, float]): The South-East corner (Latitude, Longitude).
+        margin (float): The percentage margin applied to expand the box (e.g., 0.1 for 10%).
+    """
+
+    def __init__(self, bbox_wgs_84: List[Tuple[float, float]], margin: float = 0):
+        """
+        Initializes the bounding box from a list of coordinates.
+
+        Args:
+            bbox_wgs_84 (List[Tuple[float, float]]): A list of (Lat, Lon) points defining the region.
+                This can be just 2 points (NW, SE) or a polygon of points.
+            margin (float, optional): A percentage to expand the bounding box on all sides.
+                Defaults to 0. Example: 0.1 expands width and height by 10%.
+        """
+        self.nw, self.se = get_bounding_box(bbox_wgs_84)
+        self.margin = margin
+
+        if self.margin != 0:
+            self._apply_margin()
+
+    def _apply_margin(self) -> None:
+        """
+        Internal method to expand the bounding box dimensions based on `self.margin`.
+        Modifies `self.nw` and `self.se` in-place.
+        """
+        lat_max, lon_min = self.nw
+        lat_min, lon_max = self.se
+        height = lat_max - lat_min
+        width = lon_max - lon_min
+
+        lat_pad = height * self.margin
+        lon_pad = width * self.margin
+
+        self.nw = (lat_max + lat_pad, lon_min - lon_pad)
+        self.se = (lat_min - lat_pad, lon_max + lon_pad)
+
+    def get_wgs84_bbox(self) -> List[Tuple[float, float]]:
+        """
+        Retrieves the four corner coordinates of the bounding box in WGS84.
+
+        Returns:
+            List[Tuple[float, float]]: A list of 4 points in clockwise order:
+            [Top-Left (NW), Top-Right (NE), Bottom-Right (SE), Bottom-Left (SW)].
+        """
+        top_left = self.nw
+        top_right = (self.nw[0], self.se[1])    # Lat_Max, Lon_Max
+        bottom_right = self.se
+        bottom_left = (self.se[0], self.nw[1])   # Lat_Min, Lon_Min
+
+        return [top_left, top_right, bottom_right, bottom_left]
+
+    def get_mercator_bbox(self) -> List[List[float]]:
+        """
+        Retrieves the four corner coordinates projected into Web Mercator (EPSG:3857).
+
+        Returns:
+            List[List[float]]: A list of 4 points [x, y] in meters, corresponding to the
+            WGS84 corners.
+        """
+        wgs84_corners = self.get_wgs84_bbox()
+        return convert_wgs84_to_mercator(wgs84_corners)
+
+    def intersection(self, other: 'oriented_bbox') -> Optional['oriented_bbox']:
+        """
+        Computes the intersection (overlapping region) between this bbox and another.
+
+        Args:
+            other (oriented_bbox): The other bounding box to compare against.
+
+        Returns:
+            Optional[oriented_bbox]: A new oriented_bbox representing the intersection,
+            or None if the boxes do not overlap.
+        """
+        s_lat_max, s_lon_min = self.nw
+        s_lat_min, s_lon_max = self.se
+        o_lat_max, o_lon_min = other.nw
+        o_lat_min, o_lon_max = other.se
+
+        int_lat_max = min(s_lat_max, o_lat_max)
+        int_lat_min = max(s_lat_min, o_lat_min)
+        int_lon_min = max(s_lon_min, o_lon_min)
+        int_lon_max = min(s_lon_max, o_lon_max)
+
+        # Check if valid (North > South AND East > West)
+        if int_lat_max < int_lat_min or int_lon_max < int_lon_min:
+            return None
+
+        new_coords = [(int_lat_max, int_lon_min), (int_lat_min, int_lon_max)]
+        return oriented_bbox(new_coords, margin=0)
+
+    def is_contained_in(self, other: 'oriented_bbox') -> bool:
+        """
+        Determines if this bounding box is strictly contained within another.
+
+        Args:
+            other (oriented_bbox): The bounding box to check against (the potential container).
+
+        Returns:
+            bool: True if `self` is completely inside `other`, False otherwise.
+        """
+        s_lat_max, s_lon_min = self.nw
+        s_lat_min, s_lon_max = self.se
+        o_lat_max, o_lon_min = other.nw
+        o_lat_min, o_lon_max = other.se
+
+        return (s_lat_max <= o_lat_max and
+                s_lat_min >= o_lat_min and
+                s_lon_min >= o_lon_min and
+                s_lon_max <= o_lon_max)
+
+    def union(self, other_bbox: 'oriented_bbox') -> 'oriented_bbox':
+        """
+        Computes the union (Smallest Enclosing Bounding Box) of this box and another.
+
+        Args:
+            other_bbox (oriented_bbox): The other bounding box to merge with.
+
+        Returns:
+            oriented_bbox: A new bounding box that minimally encloses both original boxes.
+        """
+        s_lat_max, s_lon_min = self.nw
+        s_lat_min, s_lon_max = self.se
+        o_lat_max, o_lon_min = other_bbox.nw
+        o_lat_min, o_lon_max = other_bbox.se
+
+        uni_lat_max = max(s_lat_max, o_lat_max)
+        uni_lat_min = min(s_lat_min, o_lat_min)
+        uni_lon_min = min(s_lon_min, o_lon_min)
+        uni_lon_max = max(s_lon_max, o_lon_max)
+
+        new_coords = [(uni_lat_max, uni_lon_min), (uni_lat_min, uni_lon_max)]
+        return oriented_bbox(new_coords, margin=0)
+
+    def __repr__(self):
+        return f"oriented_bbox(NW={self.nw}, SE={self.se})"
+
+
+def get_union_of_bboxes(bbox_list: List[oriented_bbox]) -> Optional[oriented_bbox]:
+    """
+    Computes the smallest bounding box that contains all bounding boxes in a list.
+
+    Args:
+        bbox_list (List[oriented_bbox]): A list of oriented_bbox objects.
+
+    Returns:
+        Optional[oriented_bbox]: A single bounding box enclosing all input boxes,
+        or None if the input list is empty.
     """
     if not bbox_list:
         return None
 
-    # Initialize extremes with the first box
-    first_nw, first_se = bbox_list[0]
+    # Initialize union with the first box and iteratively merge
+    union_bbox = bbox_list[0]
+    for bbox in bbox_list[1:]:
+        union_bbox = union_bbox.union(bbox)
 
-    # Current extremes
-    union_lat_max = first_nw[0]  # North
-    union_lon_min = first_nw[1]  # West
-    union_lat_min = first_se[0]  # South
-    union_lon_max = first_se[1]  # East
-
-    # Iterate through the remaining boxes
-    for i in range(1, len(bbox_list)):
-        nw, se = bbox_list[i]
-        curr_lat_max, curr_lon_min = nw
-        curr_lat_min, curr_lon_max = se
-
-        # Expand boundaries if current box goes further out
-        if curr_lat_max > union_lat_max:
-            union_lat_max = curr_lat_max  # More North
-        if curr_lon_min < union_lon_min:
-            union_lon_min = curr_lon_min  # More West
-        if curr_lat_min < union_lat_min:
-            union_lat_min = curr_lat_min  # More South
-        if curr_lon_max > union_lon_max:
-            union_lon_max = curr_lon_max  # More East
-
-    return (union_lat_max, union_lon_min), (union_lat_min, union_lon_max)
-
-
-def is_bbox_inside(inner_box, outer_box):
-    """
-    Checks if inner_box is completely contained within outer_box.
-
-    Parameters:
-        inner_box: Tuple (nw, se) where nw=(lat_max, lon_min), se=(lat_min, lon_max)
-        outer_box: Tuple (nw, se) where nw=(lat_max, lon_min), se=(lat_min, lon_max)
-    """
-    # Unpack coordinates for clarity
-    # Box = [ (lat_max, lon_min), (lat_min, lon_max) ]
-    in_nw, in_se = inner_box
-    out_nw, out_se = outer_box
-
-    # 1. Check Latitude (North/South)
-    # Inner North must be <= Outer North
-    cond_north = in_nw[0] <= out_nw[0]
-    # Inner South must be >= Outer South
-    cond_south = in_se[0] >= out_se[0]
-
-    # 2. Check Longitude (West/East)
-    # Inner West must be >= Outer West
-    cond_west = in_nw[1] >= out_nw[1]
-    # Inner East must be <= Outer East
-    cond_east = in_se[1] <= out_se[1]
-
-    return cond_north and cond_south and cond_west and cond_east
-
-
-def add_percentage_margin_to_bbox(nw, se, margin_percentage):
-    """
-    Expands a (lat, lon) bounding box by a percentage of its current size.
-
-    :param nw: Tuple (lat_max, lon_min)
-    :param se: Tuple (lat_min, lon_max)
-    :param margin_percentage: Float (e.g., 0.10 for 10% margin)
-    :return: (new_nw, new_se)
-    """
-    lat_max, lon_min = nw
-    lat_min, lon_max = se
-
-    # 1. Calculate current dimensions (in degrees)
-    height_deg = lat_max - lat_min
-    width_deg = lon_max - lon_min
-
-    # 2. Calculate the "padding" amount
-    # (margin * dimension)
-    lat_padding = height_deg * margin_percentage
-    lon_padding = width_deg * margin_percentage
-
-    # 3. Apply padding
-    # Expand North (+) and South (-)
-    new_lat_max = lat_max + lat_padding
-    new_lat_min = lat_min - lat_padding
-
-    # Expand East (+) and West (-)
-    new_lon_max = lon_max + lon_padding
-    new_lon_min = lon_min - lon_padding
-
-    return (new_lat_max, new_lon_min), (new_lat_min, new_lon_max)
-
-
-def compute_intersection(box1, box2):
-    """
-    Computes the intersection bounding box of two bounding boxes.
-
-    Parameters:
-        box1: (N, 4) or (4,) numpy array [x_min, y_min, x_max, y_max]
-        box2: (N, 4) or (4,) numpy array [x_min, y_min, x_max, y_max]
-
-    Returns:
-        intersection_box: (N, 4) or (4,) numpy array [x_min, y_min, x_max, y_max]
-                          Returns zeros if there is no intersection.
-    """
-    # Ensure inputs are numpy arrays
-    b1 = np.array(box1)
-    b2 = np.array(box2)
-
-    # 1. Calculate the intersection coordinates
-    # Intersection Top-Left is the MAX of the two Top-Lefts
-    inter_min = np.maximum(b1[..., :2], b2[..., :2])
-
-    # Intersection Bottom-Right is the MIN of the two Bottom-Rights
-    inter_max = np.minimum(b1[..., 2:], b2[..., 2:])
-
-    # 2. Compute the dimensions of the intersection box
-    # If max < min, there is no overlap, so we clip the dimension to 0
-    dims = np.maximum(inter_max - inter_min, 0)
-
-    # 3. Reconstruct the box [x_min, y_min, x_max, y_max]
-    # If dimensions are 0 (no overlap), we often want the box to be [0,0,0,0]
-    # or just the valid slice with 0 area.
-    # Here we check if area is 0 to zero out the coordinates for cleanliness.
-
-    # Create the intersection box candidate
-    inter_box = np.concatenate([inter_min, inter_max], axis=-1)
-
-    # Mask out invalid boxes where x_min > x_max or y_min > y_max (width or height is 0)
-    # Check if width or height is 0
-    valid_mask = np.all(dims > 0, axis=-1)
-
-    # Apply mask: where invalid, return 0
-    if inter_box.ndim == 1:
-        return inter_box if valid_mask else np.zeros_like(inter_box)
-    else:
-        inter_box[~valid_mask] = 0
-        return inter_box
-
-
-def compute_enclosing_box(box1, box2):
-    """
-    Computes the Smallest Enclosing Bounding Box (Merge).
-    """
-    b1 = np.array(box1)
-    b2 = np.array(box2)
-
-    # Top-Left is the MIN of the two Top-Lefts
-    enc_min = np.minimum(b1[..., :2], b2[..., :2])
-
-    # Bottom-Right is the MAX of the two Bottom-Rights
-    enc_max = np.maximum(b1[..., 2:], b2[..., 2:])
-
-    # Concatenate
-    return np.concatenate([enc_min, enc_max], axis=-1)
+    return union_bbox
 
 
 def convert_mercator_to_wgs84(fov_web_mercator, api_order=False):
@@ -198,7 +230,7 @@ def convert_mercator_to_wgs84(fov_web_mercator, api_order=False):
         return list(zip(lats, lons))
 
 
-def convert_wgs84_to_web_mercator(wgs84_points):
+def convert_wgs84_to_mercator(wgs84_points):
     """
     Converts a list of EPSG:4326 (Lat, Lon) points to EPSG:3857 (Web Mercator X, Y).
     Optional: can be a list of (Lat, Lon, alt) points that will give (X, Y, H)
