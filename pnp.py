@@ -58,6 +58,16 @@ def get_camera_position_robust(image_points, object_points, camera_matrix, dist_
             dist_coeffs,
             flags=pnp_flag
         )
+        success, rvec_final, tvec_final = cv2.solvePnP(
+            local_object_points,
+            image_points,
+            camera_matrix,
+            dist_coeffs,
+            rvec=rvec,  # Pass the guess
+            tvec=tvec,  # Pass the guess
+            useExtrinsicGuess=True,  # TELL OPENCV TO USE IT
+            flags=cv2.SOLVEPNP_ITERATIVE
+        )
 
     except cv2.error:
         # Fallback for older OpenCV versions or if SQPNP fails
@@ -78,12 +88,12 @@ def get_camera_position_robust(image_points, object_points, camera_matrix, dist_
     # --- Calculate Camera Position ---
     # R, _ = cv2.Rodrigues(rvec)
     # camera_pos_local = -np.matrix(R).T @ np.matrix(tvec)
-    np_rodrigues = np.asarray(rvec[:, :], np.float64)
+    np_rodrigues = np.asarray(rvec_final[:, :], np.float64)
     rmat = cv2.Rodrigues(np_rodrigues)[0]
-    camera_position = -np.matrix(rmat).T @ np.matrix(tvec)
+    camera_position = -np.matrix(rmat).T @ np.matrix(tvec_final)
     camera_position_global = camera_position.A1 + centroid
 
-    return camera_position_global, rvec
+    return camera_position_global, rvec_final
 
 
 # --- TEST ---
