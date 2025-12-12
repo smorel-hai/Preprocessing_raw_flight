@@ -10,13 +10,14 @@ from rasterio.warp import transform_geom
 from shapely.geometry import Polygon
 
 
-def get_best_tile_for_fov(tiff_path: str, fov_coords: list, src_crs: str = "EPSG:3857") -> dict:
+def get_best_tile_for_fov(tiff_path: str, fov_coords: list, src_crs: str = "EPSG:3857", verbose: int = 1) -> dict:
     """Extract image data from a GeoTIFF that covers the given Field of View.
 
     Args:
         tiff_path: Path to the source GeoTIFF file
         fov_coords: List of (x, y) coordinates defining the FOV polygon
         src_crs: Coordinate reference system of fov_coords (default: Web Mercator)
+        verbose: Verbosity level (0=silent, 1=normal)
 
     Returns:
         Dictionary containing:
@@ -60,7 +61,8 @@ def get_best_tile_for_fov(tiff_path: str, fov_coords: list, src_crs: str = "EPSG
 
         # 5. Read the data
         if window.width <= 0 or window.height <= 0:
-            print("Warning: FOV is completely outside the Tiff bounds.")
+            if verbose >= 1:
+                print("Warning: FOV is completely outside the Tiff bounds.")
             return None
 
         tile_data = src.read(window=window)
@@ -90,7 +92,7 @@ def get_best_tile_for_fov(tiff_path: str, fov_coords: list, src_crs: str = "EPSG
         }
 
 
-def save_tile_to_disk(result_dict: dict, output_filename: str) -> None:
+def save_tile_to_disk(result_dict: dict, output_filename: str, verbose: int = 1) -> None:
     """Save extracted tile data to a GeoTIFF file.
 
     Args:
@@ -99,6 +101,7 @@ def save_tile_to_disk(result_dict: dict, output_filename: str) -> None:
             - transform: Geospatial transform
             - crs: Coordinate reference system
         output_filename: Output file path (.tif/.tiff extension optional)
+        verbose: Verbosity level (0=silent, 1=normal)
     """
     data = result_dict['image_data']
     transform = result_dict['transform']
@@ -130,9 +133,11 @@ def save_tile_to_disk(result_dict: dict, output_filename: str) -> None:
     try:
         with rasterio.open(full_path, 'w', **profile) as dst:
             dst.write(data)
-        print(f"✅ Saved successfully: {full_path}")
+        if verbose >= 1:
+            print(f"✅ Saved successfully: {full_path}")
     except Exception as e:
-        print(f"❌ Error saving file: {e}")
+        if verbose >= 1:
+            print(f"❌ Error saving file: {e}")
 
 # --- Example Usage ---
 

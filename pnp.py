@@ -30,7 +30,7 @@ PNP_SOLVERS = {
 
 def get_camera_position_robust(image_points: np.ndarray, object_points: np.ndarray,
                                camera_matrix: np.ndarray, dist_coeffs: np.ndarray = None,
-                               solver_type: str = 'SQPNP') -> tuple:
+                               solver_type: str = 'SQPNP', verbose: int = 1) -> tuple:
     """Robustly estimate camera position using Perspective-n-Point algorithm.
 
     This function solves for the camera pose (position and orientation) given:
@@ -48,6 +48,7 @@ def get_camera_position_robust(image_points: np.ndarray, object_points: np.ndarr
         dist_coeffs: Lens distortion coefficients (default: None/zero)
         solver_type: PnP algorithm to use (default: 'SQPNP')
             Options: 'SQPNP', 'ITERATIVE', 'IPPE', 'EPNP', 'P3P', 'AP3P'
+        verbose: Verbosity level (0=silent, 1=normal)
 
     Returns:
         Tuple of (camera_position_global, rotation_vector)
@@ -89,7 +90,8 @@ def get_camera_position_robust(image_points: np.ndarray, object_points: np.ndarr
 
     except cv2.error:
         # Fallback for older OpenCV versions or if SQPNP fails
-        print("SQPNP/IPPE failed. Retrying with EPNP...")
+        if verbose >= 1:
+            print("SQPNP/IPPE failed. Retrying with EPNP...")
         pnp_flag = cv2.SOLVEPNP_EPNP
 
         success, rvec, tvec = cv2.solvePnP(

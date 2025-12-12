@@ -115,7 +115,7 @@ class Region:
 class Dataset:
     def __init__(self, root_dir: str, video_dir: str, config_file: str, margin: float, zoom: int, api_key: str,
                  enable_region_merge: bool = True, iou_thrshold: float = 0.5, angle_threshold: float = 15.0,
-                 guide_match_iou_threshold: float = 0.9):
+                 guide_match_iou_threshold: float = 0.9, verbose: int = 0):
         self.root_dir = Path(root_dir)
         self.root_dir.mkdir(exist_ok=True, parents=True)
         self.video_dir = Path(video_dir)
@@ -135,6 +135,7 @@ class Dataset:
         self.guide_match_iou_threshold = guide_match_iou_threshold
 
         self.enable_region_merge = enable_region_merge
+        self.verbose = verbose
 
     def init_existing_dataset(self) -> None:
         """Initialize dataset from existing metadata.
@@ -308,9 +309,8 @@ class Dataset:
         Returns:
             Tuple of (device_config, telemetry_metadata DataFrame)
         """
-        print(f"      Processing: {video_path}")
-
-        # Load configurations
+        if self.verbose >= 1:
+            print(f"      Processing: {video_path}")        # Load configurations
         config_data = safe_load(open(self.config_file))
         device_config = load_device_config(
             config_data["device"]["config_path"],
@@ -331,7 +331,8 @@ class Dataset:
         # Retrieve the dataframe containing telemetry (Lat, Lon, Yaw, Pitch, etc.)
         telemetry_metadata = video_processor.frame_saver.metadata
 
-        print(f"      Extracted {len(telemetry_metadata)} frames.")
+        if self.verbose >= 1:
+            print(f"      Extracted {len(telemetry_metadata)} frames.")
         return device_config, telemetry_metadata
 
     def create_zone(self, bbox: oriented_bbox, region_name: str) -> str:
@@ -372,26 +373,31 @@ class Dataset:
             video_path: Path to the drone video file (.MP4)
             fly_name: Identifier for this flight/video session
         """
-        print(f"\n[1/6] Starting Video Processing...")
+        if self.verbose >= 1:
+            print(f"\n[1/6] Starting Video Processing...")
         tmp_dir = self.root_dir / '.tmp' / video_path.stem
         tmp_dir_folder_name = 'frames'
         device_config, frames_metadata = self.extract_candidate_frames(
             video_path, tmp_dir, output_folder_name=tmp_dir_folder_name)
 
         if len(frames_metadata) == 0:
-            print(f"No compatible frames detected, skipped {video_path.name}")
+            if self.verbose >= 1:
+                print(f"No compatible frames detected, skipped {video_path.name}")
             return None
 
         # --- Step 2: Prepare Camera Geometry ---
-        print(f"\n[2/6] Calculating Field of View (FOV) for all frames...")
+        if self.verbose >= 1:
+            print(f"\n[2/6] Calculating Field of View (FOV) for all frames...")
 
         # Get intrinsic matrix (Camera lens properties)
         camera_intrinsics = device_config.cameras.get('EO').intrinsic_settings.K_coefs
         img_width, img_height = device_config.cameras.get('EO').intrinsic_settings.image_size
-        #  save device config
+        #  save device config
         devices_dict = self.metadata.get('devices_intrinsec_settings', {})
         devices_dict[device_config.serial_number] = device_config.cameras.get('EO').intrinsic_settings
         self.metadata['devices_intrinsec_settings'] = devices_dict
+        if self.verbose >= 2:
+            print(self.metadata['devices_intrinsec_settings'])
 
         fov_wgs84_list, rotation_matrix_list, global_bouding_box = compute_frames_fov(
             frames_metadata, img_width, img_height, camera_intrinsics)
@@ -403,13 +409,15 @@ class Dataset:
         frames_metadata['fov_mercator'] = fov_mercator_list
 
         # --- Step 3: Download Satellite Imagery ---
-        print(f"\n[3/6] Retrieve corresponding Region")
+        if self.verbose >= 1:
+            print(f"\n[3/6] Retrieve corresponding Region")
         # Calculate the North-West and South-East corners for the tile downloader
         drone_zone = oriented_bbox(global_bouding_box)
         corresponding_region_name = self.search_corresponding_region(drone_zone)
 
         # --- Step 4: Prune Redundant Frames ---
-        print(f"\n[4/6] Pruning Redundant Frames...")
+        if self.verbose >= 1:
+            print(f"\n[4/6] Pruning Redundant Frames...")
 
         # Retrieve existing zones to guide frame selection
         guide_coords_list_gps, guide_coords_zone_name = self.retrieve_all_zone_from_region(corresponding_region_name)
@@ -425,7 +433,8 @@ class Dataset:
         )
 
         # --- Step 5: Save Filtered Results ---
-        print(f"\n[5/6] Dealing with selected Frames ...")
+        if self.verbose >= 1:
+            print(f"\n[5/6] Dealing with selected Frames ...")
 
         working_dir = self.root_dir / corresponding_region_name
         relative_dir = Path('drone') / fly_name
@@ -450,7 +459,8 @@ class Dataset:
             if source_path.exists():
                 shutil.copy(source_path, dest_path)
             else:
-                print(f"      Warning: Source file missing {source_path}")
+                if self.verbose >= 1:
+                    print(f"      Warning: Source file missing {source_path}")
 
             # Update metadata with frame information
             frame_id = dest_path.stem
@@ -483,9 +493,9 @@ class Dataset:
                     self.metadata[region_name]["zones"][zone_id]["satellite"][global_view.stem] = str(relative_path)
                     if save_tiff_file.exists():
                         continue
-                    tile_result = get_best_tile_for_fov(global_view, zone_mercator)
+                    tile_result = get_best_tile_for_fov(global_view, zone_mercator, verbose=self.verbose)
                     if tile_result:
-                        save_tile_to_disk(tile_result, str(save_tiff_file))
+                        save_tile_to_disk(tile_result, str(save_tiff_file), verbose=self.verbose)
         self.save_metadata_json()
 
     def run_extraction(self) -> None:
@@ -525,5 +535,9 @@ if __name__ == '__main__':
     zoom = 17
     api_key = "SZ5Q6ilGzFm9Wge4GYp8"
 
-    test_dataset = Dataset(root_dir, video_dir, config_file, margin, zoom, api_key)
+    # verbose levels:
+    # 0 = silent (no output)
+    # 1 = normal (default, shows progress)
+    # 2 = debug (shows additional debug info)
+    test_dataset = Dataset(root_dir, video_dir, config_file, margin, zoom, api_key, verbose=0)
     test_dataset.run_extraction()
