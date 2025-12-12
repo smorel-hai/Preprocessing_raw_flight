@@ -394,10 +394,12 @@ class Dataset:
         img_width, img_height = device_config.cameras.get('EO').intrinsic_settings.image_size
         #  save device config
         devices_dict = self.metadata.get('devices_intrinsec_settings', {})
-        devices_dict[device_config.serial_number] = device_config.cameras.get('EO').intrinsic_settings
+        devices_dict[device_config.serial_number] = {
+            'K_coefs': device_config.cameras.get('EO').intrinsic_settings.K_coefs,
+            'distortion_coefficients': device_config.cameras.get('EO').intrinsic_settings.distortion_coefficients,
+            'image_size': device_config.cameras.get('EO').intrinsic_settings.image_size}
+
         self.metadata['devices_intrinsec_settings'] = devices_dict
-        if self.verbose >= 2:
-            print(self.metadata['devices_intrinsec_settings'])
 
         fov_wgs84_list, rotation_matrix_list, global_bouding_box = compute_frames_fov(
             frames_metadata, img_width, img_height, camera_intrinsics)
