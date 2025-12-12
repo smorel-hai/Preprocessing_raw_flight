@@ -3,11 +3,11 @@ import pandas as pd
 from typing import Dict, List, Optional, Tuple
 import yaml
 from pathlib import Path
+import cv2
 
 
 def load_config(config_path):
     with open(config_path, 'r') as file:
-        # safe_load is recommended for security
         config = yaml.safe_load(file)
     return config
 
@@ -37,13 +37,13 @@ class DJIMetadata:
         for frame_data in self.metadata:
             for key, value in frame_data.items():
                 if key not in DTYPES:
-                    continue  # Skip keys not in DTYPES to prevent errors on extra data
+                    continue
                 if value is None:
-                    continue  # Handle None values gracefully
+                    continue
                 try:
                     frame_data[key] = DTYPES[key](value)
                 except ValueError:
-                    pass  # Keep original if conversion fails
+                    pass
 
 
 class DJIMetadataParser:
@@ -58,27 +58,22 @@ class DJIMetadataParser:
         self.extracted_data = []
 
         for frame_metadata in self.frames_metadata:
-            # Skip empty strings from split
             if frame_metadata.strip():
                 self._parse_frame(frame_metadata)
 
         return self.extracted_data
 
     def _split_by_frames(self, content: str) -> None:
-        # Split by double newline which standard SRT uses to separate blocks
         self.frames_metadata = re.split(r"\n\s*\n", content.strip())
 
     def _parse_frame(self, frame_metadata: str) -> None:
         self.current_frame_metadata = {}
         self._parse_frame_metadata(frame_metadata)
-        if self.current_frame_metadata:  # Only save if we found data
+        if self.current_frame_metadata:
             self._save_frame_metadata()
 
     def _parse_frame_metadata(self, frame_metadata: str) -> None:
         lines = frame_metadata.split("\n")
-
-        # DJI SRTs usually have: Index, Time, FrameInfo, Timestamp, Metadata
-        # We need at least 5 lines to match your regex indices safely
         if len(lines) >= 5:
             frame_info_line = lines[2]
             self.current_frame_metadata["FrameNumber"] = self._parse_single_metadata(
@@ -111,7 +106,6 @@ class DJIMetadataParser:
                 r"gb_roll: ([\d.-]+)", metadata_line)
 
     def _save_frame_metadata(self) -> None:
-        # Ensure all keys in DTYPES exist, fill with None if missing
         for key in DTYPES:
             if key not in self.current_frame_metadata:
                 self.current_frame_metadata[key] = None
@@ -123,130 +117,169 @@ class DJIMetadataParser:
 
 
 def get_dji_dataframe(srt_path: str) -> pd.DataFrame:
-    """
-    Parses a DJI SRT file and returns a Pandas DataFrame.
-    """
-    # 1. Initialize the Parser
     parser = DJIMetadataParser()
-
-    # 2. Parse the file (returns a DJIMetadata object)
     dji_data_object = parser(srt_path)
-
-    # 3. Extract the list of dictionaries
-    list_of_dicts = dji_data_object.metadata
-
-    # 4. Create DataFrame
-    df = pd.DataFrame(list_of_dicts)
-
-    # Optional: Convert Timestamp string to actual datetime objects
+    df = pd.DataFrame(dji_data_object.metadata)
     if 'Timestamp' in df.columns:
         df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
-
     return df
 
 
-def get_dji_clips(
+def get_valid_frame_indices(
     df: pd.DataFrame,
-    clip_length: int = 10,
-    clip_delta: int = 60,
+    delta: int = 1,
     min_pitch: float = -50,
     max_pitch: float = 90,
     min_alt: float = 0,
     threshold_gimbal: float = 0.1,
     default_focal_len: float = 24.0
-) -> List[Tuple[int, int]]:
+) -> List[int]:
     """
-    Returns a list of (start_index, end_index) tuples for valid clips.
+    Returns a list of frame indices (sampled by `delta`) where all constraints are met.
     """
+    # 1. Slice DataFrame
+    df_subset = df.iloc[::delta].copy()
 
-    # --- 1. COMPUTE MASKS (CONSTRAINTS) ---
+    # 2. Compute Masks
+    mask_pitch = df_subset["Gimbal Pitch"].between(min_pitch, max_pitch)
+    mask_alt = df_subset["Relative Altitude"] > min_alt
+    mask_zoom = (df_subset["DZoom Ratio"] == 1.0) & (df_subset["Focal Length"] == default_focal_len)
 
-    # A. Pitch Range
-    mask_pitch = df["Gimbal Pitch"].between(min_pitch, max_pitch)
-
-    # B. Altitude
-    mask_alt = df["Relative Altitude"] > min_alt
-
-    # C. Zoom (Digital Zoom must be 1.0 AND Focal Length must be default)
-    mask_zoom = (df["DZoom Ratio"] == 1.0) & (df["Focal Length"] == default_focal_len)
-
-    # D. Stability (Gimbal shouldn't move more than threshold between frames)
-    # We check the difference between consecutive frames for Yaw, Pitch, and Roll
     gimbal_cols = ["Gimbal Yaw", "Gimbal Pitch", "Gimbal Roll"]
-    # .diff() calculates change from previous row. .abs() makes it positive.
-    # .le() checks if less than or equal to threshold.
-    # .all(axis=1) ensures Yaw AND Pitch AND Roll are ALL stable.
-    mask_stability = df[gimbal_cols].diff().abs().le(threshold_gimbal).all(axis=1)
+    mask_stability = df_subset[gimbal_cols].diff().abs().le(threshold_gimbal).all(axis=1)
 
-    # --- 2. COMBINE MASKS ---
-
-    # A frame is valid only if ALL conditions are True
+    # 3. Combine
     valid_mask = mask_pitch & mask_alt & mask_zoom & mask_stability
 
-    # --- 3. EXTRACT CLIPS (COMPUTER LOGIC) ---
-
-    # Calculate 'streaks' (cumulative count of consecutive True values)
-    # This replicates the logic: if valid, streak++, else streak=0
-    # We use a cumulative sum of the 'reset' points to group consecutive valid frames
-    grouper = (valid_mask != valid_mask.shift()).cumsum()
-
-    # Add a 'streak' column to the dataframe temporarily
-    df['streak'] = df.groupby(grouper).cumcount() + 1
-    # Where mask is False, streak should be 0 (the groupby counts everything)
-    df.loc[~valid_mask, 'streak'] = 0
-
-    # Apply the specific extraction logic from your original code:
-    # "clips_ending_mask = streaks % (delta + length) == length - 1"
-
-    # Determine where valid clips end
-    # Note: We subtract 1 because cumcount starts at 0 in Python logic usually,
-    # but here we simulated 1-based counting to match your loop logic.
-    cycle = clip_delta + clip_length
-    target_remainder = clip_length
-
-    # Find indices where the streak hits exactly the length needed to form a clip
-    # valid_ends is a boolean Series
-    valid_ends = (df['streak'] >= clip_length) & (df['streak'] % cycle == target_remainder)
-
-    # Get the integer indices
-    end_indices = df.index[valid_ends].tolist()
-
-    # Calculate start indices based on the length
-    clips = [(end - clip_length + 1, end + 1) for end in end_indices]
-
-    # Cleanup temporary column
-    df.drop(columns=['streak'], inplace=True)
-
-    return clips
+    return df_subset.index[valid_mask].tolist()
 
 
-def get_clips(video_path: Path, config_path: str):
+def save_valid_frames(video_path: Path, valid_indices: List[int], output_folder: Path):
+    """
+    Saves frames from valid_indices.
+    Skips files that already exist in output_folder.
+    Uses cap.grab() for high-speed skipping of unwanted/existing frames.
+    """
+    output_folder.mkdir(parents=True, exist_ok=True)
+
+    # --- 1. Filter out indices that already exist on disk ---
+    needed_indices = []
+    skipped_count = 0
+
+    for idx in valid_indices:
+        filename = output_folder / f"frame_{idx:06d}.jpg"
+        if filename.exists():
+            skipped_count += 1
+        else:
+            needed_indices.append(idx)
+
+    print(f"Total valid frames: {len(valid_indices)}")
+    print(f"Already extracted: {skipped_count}")
+    print(f"Remaining to process: {len(needed_indices)}")
+
+    # If nothing to do, return early
+    if not needed_indices:
+        print("All frames already exist. Skipping video.")
+        return
+
+    # --- 2. Setup Video Capture ---
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        print(f"Error: Could not open video {video_path}")
+        return
+
+    # Convert to set for O(1) lookup
+    target_set = set(needed_indices)
+    max_target = max(needed_indices)
+
+    current_frame = 0
+    saved_new_count = 0
+
+    print(f"Processing {video_path.name}...")
+
+    # --- 3. Optimized Processing Loop ---
+    while True:
+        # Optimization: Stop if we passed the last needed frame
+        if current_frame > max_target:
+            break
+
+        # Check if we need this frame
+        if current_frame in target_set:
+            # We need this frame: Decode (expensive) and Save
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            filename = output_folder / f"frame_{current_frame:06d}.jpg"
+            cv2.imwrite(str(filename), frame)
+            saved_new_count += 1
+        else:
+            # We don't need this frame (or it already exists): Fast Skip
+            ret = cap.grab()
+            if not ret:
+                break
+
+        current_frame += 1
+
+    cap.release()
+    print(f"Done. Newly extracted: {saved_new_count}. Output: {output_folder}")
+
+
+def run_pipeline(video_path: Path, config_path: str):
+    """
+    Main orchestration function:
+    1. Loads Config & SRT
+    2. Calculates Valid Indices (Filtering)
+    3. Retrieves Metadata for valid frames
+    4. Extracts Frames (checking for duplicates)
+    """
+    video_path = Path(video_path)
     srt_path = video_path.parent / (video_path.stem + '.SRT')
-    config = load_config(config_path)
 
-    # 2. Extract the arguments neatly
-    # The structure corresponds exactly to your file indentation
+    if not srt_path.exists():
+        print(f"Error: SRT file not found at {srt_path}")
+        return
+
+    # 1. Load Config
+    config = load_config(config_path)
     computer_args = config['preprocessing_args']['clips_computer_args']
     constraints = computer_args['clips_constraints']
+    delta_val = computer_args.get('clip_delta', 1)
 
-    df = get_dji_dataframe(srt_path)
+    # 2. Parse Metadata
+    print("Parsing SRT metadata...")
+    df = get_dji_dataframe(str(srt_path))
 
-    # 3. Call the function using "dictionary unpacking" (the ** operator)
-    # This automatically maps 'clip_length' in the yaml to 'clip_length' in the function
-    clips = get_dji_clips(
+    # 3. Filter Frames
+    print("Filtering frames based on constraints...")
+    valid_indices = get_valid_frame_indices(
         df,
-        clip_length=computer_args['clip_length'],
-        clip_delta=computer_args['clip_delta'],
-        **constraints  # This unpacks min_alt, min_pitch, etc. automatically!
+        delta=delta_val,
+        **constraints
     )
-    print(clips)
-    print(df)
+
+    # 4. Retrieve Filtered Metadata
+    # This gives you the dataframe containing only the "valid" rows
+    df_filtered = df.loc[valid_indices].copy()
+
+    # Optional: Save this metadata to CSV if needed
+    # df_filtered.to_csv(video_path.parent / "filtered_metadata.csv", index=False)
+
+    # 5. Extract Frames
+    output_folder = video_path.parent / "extracted_frames"
+    save_valid_frames(video_path, valid_indices, output_folder)
+
+    return df_filtered
 
 
 if __name__ == '__main__':
     # --- USAGE EXAMPLE ---
-
     video_path = Path(
         '/home/sebastienmorel/Documents/Code/projects/labo/preprocessing_rawflight_pipeline/data/raw_fights/DJI_202509271440_017/DJI_20250927144136_0001_V.MP4')
     config_path = '/home/sebastienmorel/Documents/Code/projects/labo/preprocessing_rawflight_pipeline/config/preprocessing/raw_preprocessing_config_refacto.yaml'
-    get_clips(video_path, config_path)
+
+    # Run the full pipeline
+    filtered_df = run_pipeline(video_path, config_path)
+
+    if filtered_df is not None:
+        print(f"\nPipeline finished. Filtered dataframe shape: {filtered_df.shape}")
