@@ -79,7 +79,7 @@ def get_euler_angles_scipy(R_matrix):
     return yaw, pitch, roll
 
 
-def transfer_skip_existing_names(source_folder, target_folder):
+def transfer_skip_existing_names(source_folder, target_folder, skip_parents=['global_tiles']):
     """
     Recursively moves files from source to target using pathlib.
     Skips files if the name already exists in the destination.
@@ -99,6 +99,9 @@ def transfer_skip_existing_names(source_folder, target_folder):
     # rglob('*') recursively iterates over all files and folders
     for src_file in source.rglob('*'):
         if src_file.is_file():
+            #  Prevent the copy of certain files
+            if src_file.parent.name in skip_parents:
+                continue
             # Calculate the relative path (e.g. 'subfolder/image.jpg')
             relative_path = src_file.relative_to(source)
 
@@ -149,3 +152,16 @@ def delete_folder(folder_path):
         print(f"[Success] Deleted folder: {folder_path}")
     except OSError as e:
         print(f"[Error] Failed to delete {folder_path}. Reason: {e}")
+
+
+def find_values_gen(data, target_key):
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if key == target_key:
+                yield value
+            # Recursively yield from children
+            yield from find_values_gen(value, target_key)
+
+    elif isinstance(data, list):
+        for item in data:
+            yield from find_values_gen(item, target_key)

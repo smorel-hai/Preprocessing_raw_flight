@@ -176,7 +176,7 @@ def main(video_path, output_root, config_path, api_key, zoom_level, iou_threshol
             pose_estimation, rec = get_camera_position_robust(image_corners_homogeneous[:, :2],
                                                               np.array(fov_mercator), calibration_matrix)
             #  Convert the real position to mercator for computing error of position
-            pos_mercator = convert_wgs84_to_web_mercator([[lat, lon]])[0]
+            pos_mercator = convert_wgs84_to_mercator([[lat, lon]])[0]
             error_estimation_norm.append(np.linalg.norm(np.array(pose_estimation)[:2] - np.array(pos_mercator)))
             #  Convert the estimated position to gps for QGIS functions
             pose_estimation_gps = convert_mercator_to_wgs84([pose_estimation])[0]

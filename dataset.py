@@ -1,10 +1,11 @@
 import json
 from pathlib import Path
 import shutil
+from datetime import datetime
 from yaml import safe_load
-from utils.utils import convert_wgs84_to_mercator, transfer_skip_existing_names, delete_folder
+from utils.utils import convert_wgs84_to_mercator, transfer_skip_existing_names, delete_folder, find_values_gen
 from utils.oriented_bbox import oriented_bbox, get_union_of_bboxes
-from geopy.geocoders import Nominatim
+import reverse_geocoder as rg
 from retreieve_satellite_image_depending_on_coord import download_tiles, merge_tiles_to_geotiff
 from crotalinae_pg.data_preprocessing.raw.video_processor import VideoProcessor
 from crotalinae_pg.data_preprocessing.raw.utils.devices import load_device_config
@@ -14,24 +15,24 @@ from extract_satellite_tile_from_drone_view import get_best_tile_for_fov, save_t
 
 
 def get_city_from_point(lat, lon):
-    geolocator = Nominatim(user_agent="my_geo_app")
-    location = geolocator.reverse((lat, lon), language='en')
-    address = location.raw['address']
-    return address.get('city') or address.get('town') or address.get('village')
+    # rg.search returns a list of dictionaries (default returns 1 result)
+    results = rg.search((lat, lon))
+
+    # The 'name' key usually holds the city/town name
+    return results[0]['name']
 
 
 class Region:
     def __init__(self, zone: oriented_bbox):
+
         self.zone = zone
         self._get_name()
-        self.tiff_path = None
-        self.temp_dir = None
 
     def _get_name(self):
         self.barycenter = self.zone.center
         self.name = get_city_from_point(*self.barycenter)
 
-    def download_corresponding_tiff_file(self, save_path, temp_folder, api_key, margin, zoom):
+    def download_corresponding_tiff_file(self, save_path, temp_folder, api_key, margin, zoom, api_name='MapTiler'):
         temp_folder = Path(temp_folder) / self.name
         temp_folder.mkdir(exist_ok=True, parents=True)
         #  If we want to have some extra margin around the salellite views, we need to have some margin
@@ -40,10 +41,22 @@ class Region:
         download_tiles(bbox_with_margin.nw, bbox_with_margin.se, api_key, temp_folder, zoom=zoom)
         merge_tiles_to_geotiff(temp_folder, save_path, zoom)
 
-        #  TODO: better deal with that if we load the dataset and do an update of a region : need the tiff_path and temp_dir....
-        #  So, at loading, need to retrieve the correct path in the corresponding Region
-        self.tiff_path = save_path
-        self.temp_dir = temp_folder
+        historic_download_json_path = save_path.parent / 'download_historic.json'
+
+        if not historic_download_json_path.exists():
+            historic_download_json = {}
+        else:
+            with open(historic_download_json_path) as f:
+                historic_download_json = json.load(f)
+
+        # Get current date and time
+        current_date = datetime.now().strftime("%Y_%m_%d")
+
+        historic_download_json_api = historic_download_json.get(api_name, {})
+        historic_download_json_api[current_date] = bbox_with_margin.get_mercator_bbox()
+        historic_download_json[api_name] = historic_download_json_api
+        with open(historic_download_json_path, "w") as file:
+            json.dump(historic_download_json, file, indent=4)
 
     def update_bbox(self, new_zone: oriented_bbox):
         self.zone = new_zone
@@ -60,7 +73,7 @@ class Dataset:
 
         self.region_dict = {}
         self.updated_region = set()  #  Usefull for knowing the region that has been updated, that needs to download the global tiff
-        self.metadata_json_path = self.root_dir / 'metadata'
+        self.metadata_json_path = self.root_dir / 'metadata.json'
         self.load_json()
 
         self.margin = margin
@@ -73,17 +86,27 @@ class Dataset:
 
         self.enable_region_merge = enable_region_merge
 
+    def init_existing_dataset(self):
+
+        for key, val in self.metadata.items():
+            self.region_dict[key] = Region(oriented_bbox(val["bbox_wgs84"]))
+
+            #  Verify if exists at least one region_view for the region
+            region_view_path = self.root_dir / key / 'satellite' / 'global_view'
+            if (not region_view_path.exists()) or len(list(region_view_path.iterdir())) < 1:
+                self.updated_region.add(key)
+
     def load_json(self):
         if not self.metadata_json_path.exists():
             self.metadata = {}
         else:
-            # TODO: instantier la liste des Regions lors du load
             with open(self.metadata_json_path) as f:
                 self.metadata = json.load(f)
+            self.init_existing_dataset()
 
     def save_metadata_json(self):
         with open(self.metadata_json_path, "w") as file:
-            json.dump(self.metadata, file)
+            json.dump(self.metadata, file, indent=4)
 
     def merge_region(self, regions_to_merge_name):
         list_region_zone = [self.region_dict[region_name].zone for region_name in regions_to_merge_name]
@@ -100,6 +123,7 @@ class Dataset:
             #  Remove the former_name from the region dict and the updated_region
             self.region_dict.pop(former_name)
             self.updated_region.discard(former_name)
+            self.metadata.pop(former_name)
         return merge_region_name
 
     def search_corresponding_region(self, zone_candidate: oriented_bbox):
@@ -153,13 +177,17 @@ class Dataset:
                                               'bbox_wgs84': zone_region.get_wgs84_bbox(), "zones": {}}
         return name_region_in_dict
 
-    def download_global_tiff_updated_region(self):
+    def download_global_tiff_updated_region(self, api_name='MapTiler'):
         for region_name in self.updated_region:
             #  Download the region tiff
-            save_path = self.root_dir / region_name / 'satellite' / 'Region_view.tiff'
+            save_path = self.root_dir / region_name / 'satellite' / 'global_view' / f'{api_name}.tiff'
+            save_path.parent.mkdir(exist_ok=True, parents=True)
             temp_dir = self.root_dir / region_name / 'satellite' / '.tmp'
             self.region_dict[region_name].download_corresponding_tiff_file(
                 save_path, temp_dir, self.api_key, self.margin, self.zoom)
+
+            self.metadata[region_name]['global_view_path'] = str(save_path)
+        self.save_metadata_json()
 
     def retrieve_all_zone_from_region(self, selected_region):
         zone_bbox_list = []
@@ -222,12 +250,21 @@ class Dataset:
         device_config, frames_metadata = self.extract_candidate_frames(
             video_path, tmp_dir, output_folder_name=tmp_dir_folder_name)
 
+        if len(frames_metadata) == 0:
+            print(f"No compatible frames detected, skipped {video_path.name}")
+            return None
+
         # --- Step 2: Prepare Camera Geometry ---
         print(f"\n[2/6] Calculating Field of View (FOV) for all frames...")
 
         # Get intrinsic matrix (Camera lens properties)
         camera_intrinsics = device_config.cameras.get('EO').intrinsic_settings.K_coefs
         img_width, img_height = device_config.cameras.get('EO').intrinsic_settings.image_size
+        #  save device config
+        devices_dict = self.metadata.get('devices_intrinsec_settings', {})
+        devices_dict[device_config.serial_number] = device_config.cameras.get('EO').intrinsic_settings
+        self.metadata['devices_intrinsec_settings'] = devices_dict
+
         fov_wgs84_list, rotation_matrix_list, global_bouding_box = compute_frames_fov(
             frames_metadata, img_width, img_height, camera_intrinsics)
 
@@ -263,8 +300,8 @@ class Dataset:
         print(f"\n[5/6] Dealing with selected Frames ...")
 
         working_dir = self.root_dir / corresponding_region_name
-
-        save_frame_dir = working_dir / 'drone' / fly_name
+        relative_dir = Path('drone') / fly_name
+        save_frame_dir = working_dir / relative_dir
         save_frame_dir.mkdir(exist_ok=True, parents=True)
 
         for frame_indice, corresponding_zone_idx in guided_matches_output.items():
@@ -286,32 +323,56 @@ class Dataset:
                 print(f"      Warning: Source file missing {source_path}")
 
             id_drone = dest_path.stem
-            info_image_dict = {'image_path': str(dest_path),
+            info_image_dict = {'image_path': str(relative_dir / frame_filename),
                                'fly_id': fly_name}
             info_image_dict |= frame_info_dict
             self.metadata[corresponding_region_name]['zones'][corresponding_zone_name]['drone'][id_drone] = info_image_dict
 
-    def download_tiles_corresponding_to_drone():
-        raise NotImplementedError
+    def download_tiles_corresponding_to_drone(self):
+        for region_name, content in self.metadata.items():
+            global_view_folder = self.root_dir / region_name / 'satellite' / 'global_view'
+            zones_dict = content['zones']
+            for global_view in global_view_folder.iterdir():
+                if global_view.suffix != '.tiff':
+                    continue
+                for zone_id, zone_content in zones_dict.items():
+                    zone_mercator = zone_content['bbox_mercator']
+                    relative_path = Path('satellite') / 'local_tiles' / zone_id / global_view.name
+                    save_tiff_file = self.root_dir / region_name / relative_path
+                    save_tiff_file.parent.mkdir(exist_ok=True, parents=True)
+                    self.metadata[region_name]["zones"][zone_id]["satellite"][global_view.stem] = str(relative_path)
+                    if save_tiff_file.exists():
+                        continue
+                    tile_result = get_best_tile_for_fov(global_view, zone_mercator)
+                    if tile_result:
+                        save_tile_to_disk(tile_result, str(save_tiff_file))
+        self.save_metadata_json()
 
     def run_extraction(self):
-
+        already_extracted_flight = list(find_values_gen(self.metadata, "fly_id"))
         for fly_folder in self.video_dir.iterdir():
+            if fly_folder.name in already_extracted_flight:
+                continue
             for video in fly_folder.iterdir():
                 if video.suffix.lower() != '.mp4':
                     continue
+                if video.stem.split('_')[-1] != 'V':
+                    continue
                 self.process_video(video, fly_folder.name)
         self.save_metadata_json()
+        self.download_after_extraction()
+
+    def download_after_extraction(self):
         self.download_global_tiff_updated_region()
         self.download_tiles_corresponding_to_drone()
 
 
 if __name__ == '__main__':
     root_dir = 'data/preprocessing_extraction'
-    video_dir = 'data/raw_fights'
+    video_dir = '/home/sebastienmorel/Documents/Data/raw-flights/raw'
     config_file = 'config/preprocessing/raw_preprocessing_config.yaml'
     margin = 0.1
-    zoom = 18
+    zoom = 17
     api_key = "SZ5Q6ilGzFm9Wge4GYp8"
 
     test_dataset = Dataset(root_dir, video_dir, config_file, margin, zoom, api_key)
