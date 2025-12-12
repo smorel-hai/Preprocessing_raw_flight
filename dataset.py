@@ -85,10 +85,7 @@ class Region:
         temp_folder = Path(temp_folder) / self.name
         temp_folder.mkdir(exist_ok=True, parents=True)
 
-        # Expand bounding box with margin for complete coverage
-        bbox_with_margin = self.zone.generate_bbox_with_margin(margin)
-
-        download_tiles(bbox_with_margin.nw, bbox_with_margin.se, api_key, temp_folder, zoom=zoom)
+        download_tiles(self.zone.nw, self.zone.se, api_key, temp_folder, zoom=zoom)
         merge_tiles_to_geotiff(temp_folder, save_path, zoom)
 
         historic_download_json_path = save_path.parent / 'download_historic.json'
@@ -103,7 +100,7 @@ class Region:
         current_date = datetime.now().strftime("%Y_%m_%d")
 
         historic_download_json_api = historic_download_json.get(api_name, {})
-        historic_download_json_api[current_date] = bbox_with_margin.get_mercator_bbox()
+        historic_download_json_api[current_date] = self.zone.get_mercator_bbox()
         historic_download_json[api_name] = historic_download_json_api
         with open(historic_download_json_path, "w") as file:
             json.dump(historic_download_json, file, indent=4)
@@ -247,7 +244,7 @@ class Dataset:
         Returns:
             Unique name identifier for the new region
         """
-        new_region = Region(zone_region)
+        new_region = Region(zone_region.generate_bbox_with_margin(self.margin))
         name_region = new_region.name
         idx = 0
         name_region_in_dict = name_region + f'_{idx}'
