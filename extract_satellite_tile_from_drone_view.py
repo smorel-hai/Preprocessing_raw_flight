@@ -1,12 +1,30 @@
+"""Satellite tile extraction module for matching drone field-of-view.
+
+This module extracts specific regions from large satellite GeoTIFF files
+that correspond to drone camera field-of-view polygons.
+"""
+
 import rasterio
 from rasterio.windows import Window, from_bounds
 from rasterio.warp import transform_geom
 from shapely.geometry import Polygon
 
 
-def get_best_tile_for_fov(tiff_path, fov_coords, src_crs="EPSG:3857"):
-    """
-    Extracts the image data (tile) from a TIFF that covers the given Field of View.
+def get_best_tile_for_fov(tiff_path: str, fov_coords: list, src_crs: str = "EPSG:3857") -> dict:
+    """Extract image data from a GeoTIFF that covers the given Field of View.
+
+    Args:
+        tiff_path: Path to the source GeoTIFF file
+        fov_coords: List of (x, y) coordinates defining the FOV polygon
+        src_crs: Coordinate reference system of fov_coords (default: Web Mercator)
+
+    Returns:
+        Dictionary containing:
+            - image_data: Numpy array of the extracted tile
+            - transform: Rasterio transform for the tile
+            - crs: Coordinate reference system
+            - coverage_ratio: Fraction of FOV covered by the TIFF
+        Returns None if FOV is completely outside TIFF bounds
     """
     # 1. Create Shapely Polygon from FOV
     fov_poly = Polygon(fov_coords)
@@ -72,13 +90,15 @@ def get_best_tile_for_fov(tiff_path, fov_coords, src_crs="EPSG:3857"):
         }
 
 
-def save_tile_to_disk(result_dict, output_filename_variable):
-    """
-    Saves the extracted tile data to a GeoTIFF file.
+def save_tile_to_disk(result_dict: dict, output_filename: str) -> None:
+    """Save extracted tile data to a GeoTIFF file.
 
     Args:
-        result_dict (dict): The output from get_best_tile_for_fov
-        output_filename_variable (str): The name you want for the file (e.g. "image_01")
+        result_dict: Dictionary from get_best_tile_for_fov containing:
+            - image_data: Numpy array of pixel data
+            - transform: Geospatial transform
+            - crs: Coordinate reference system
+        output_filename: Output file path (.tif/.tiff extension optional)
     """
     data = result_dict['image_data']
     transform = result_dict['transform']
@@ -87,7 +107,13 @@ def save_tile_to_disk(result_dict, output_filename_variable):
     # Get dimensions (Bands, Height, Width)
     count, height, width = data.shape
 
-    # Define metadata profile for the new Tiff
+    # Ensure output has proper extension
+    if not output_filename.lower().endswith(('.tif', '.tiff')):
+        full_path = f"{output_filename}.tif"
+    else:
+        full_path = output_filename
+
+    # Define metadata profile for the new GeoTIFF
     profile = {
         'driver': 'GTiff',
         'dtype': data.dtype,
@@ -96,15 +122,9 @@ def save_tile_to_disk(result_dict, output_filename_variable):
         'width': width,
         'crs': crs,
         'transform': transform,
-        'compress': 'lzw',  # Optional: Good for saving disk space
+        'compress': 'lzw',  # Good for saving disk space
         'nodata': 0
     }
-
-    # Ensure extension exists
-    if not output_filename_variable.lower().endswith(('.tif', '.tiff')):
-        full_path = f"{output_filename_variable}.tif"
-    else:
-        full_path = output_filename_variable
 
     # Write the file
     try:

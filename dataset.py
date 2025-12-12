@@ -1,11 +1,27 @@
+"""Dataset management module for drone video preprocessing pipeline.
+
+This module provides classes and functions to manage the extraction, processing, and organization
+of drone video data into a structured dataset with corresponding satellite imagery.
+
+Key Components:
+    - Region: Represents a geographical region with satellite imagery
+    - Dataset: Main class managing the entire preprocessing pipeline
+"""
+
 import json
 from pathlib import Path
 import shutil
 from datetime import datetime
 from yaml import safe_load
+
+# Internal utilities
 from utils.utils import convert_wgs84_to_mercator, transfer_skip_existing_names, delete_folder, find_values_gen
 from utils.oriented_bbox import oriented_bbox, get_union_of_bboxes
+
+# External dependencies
 import reverse_geocoder as rg
+
+# Processing modules
 from retreieve_satellite_image_depending_on_coord import download_tiles, merge_tiles_to_geotiff
 from crotalinae_pg.data_preprocessing.raw.video_processor import VideoProcessor
 from crotalinae_pg.data_preprocessing.raw.utils.devices import load_device_config
@@ -14,28 +30,62 @@ from pruning_tile import prune_redundant_areas_with_rotation
 from extract_satellite_tile_from_drone_view import get_best_tile_for_fov, save_tile_to_disk
 
 
-def get_city_from_point(lat, lon):
-    # rg.search returns a list of dictionaries (default returns 1 result)
-    results = rg.search((lat, lon))
+def get_city_from_point(lat: float, lon: float) -> str:
+    """Get the city name from GPS coordinates using reverse geocoding.
 
-    # The 'name' key usually holds the city/town name
+    Args:
+        lat: Latitude in decimal degrees
+        lon: Longitude in decimal degrees
+
+    Returns:
+        City or town name at the given coordinates
+    """
+    results = rg.search((lat, lon))
     return results[0]['name']
 
 
 class Region:
-    def __init__(self, zone: oriented_bbox):
+    """Represents a geographical region for drone data processing.
 
+    A Region manages a specific geographical area including its bounding box,
+    name (derived from location), and associated satellite imagery.
+
+    Attributes:
+        zone: Oriented bounding box defining the region's boundaries
+        barycenter: Center point (lat, lon) of the region
+        name: City/town name at the region's center
+    """
+
+    def __init__(self, zone: oriented_bbox):
+        """Initialize a Region with a geographical bounding box.
+
+        Args:
+            zone: Oriented bounding box defining the region
+        """
         self.zone = zone
         self._get_name()
 
-    def _get_name(self):
+    def _get_name(self) -> None:
+        """Set the region name based on its center coordinates."""
         self.barycenter = self.zone.center
         self.name = get_city_from_point(*self.barycenter)
 
-    def download_corresponding_tiff_file(self, save_path, temp_folder, api_key, margin, zoom, api_name='MapTiler'):
+    def download_corresponding_tiff_file(self, save_path: Path, temp_folder: Path, api_key: str,
+                                         margin: float, zoom: int, api_name: str = 'MapTiler') -> None:
+        """Download satellite imagery for this region as a GeoTIFF file.
+
+        Args:
+            save_path: Path where the merged GeoTIFF will be saved
+            temp_folder: Temporary directory for downloading individual tiles
+            api_key: API key for the satellite imagery service
+            margin: Fractional margin to add around the region (e.g., 0.1 = 10%)
+            zoom: Zoom level for satellite tiles
+            api_name: Name of the satellite API service (default: 'MapTiler')
+        """
         temp_folder = Path(temp_folder) / self.name
         temp_folder.mkdir(exist_ok=True, parents=True)
-        #  If we want to have some extra margin around the salellite views, we need to have some margin
+
+        # Expand bounding box with margin for complete coverage
         bbox_with_margin = self.zone.generate_bbox_with_margin(margin)
 
         download_tiles(bbox_with_margin.nw, bbox_with_margin.se, api_key, temp_folder, zoom=zoom)
@@ -86,17 +136,29 @@ class Dataset:
 
         self.enable_region_merge = enable_region_merge
 
-    def init_existing_dataset(self):
+    def init_existing_dataset(self) -> None:
+        """Initialize dataset from existing metadata.
 
+        Loads existing regions from metadata and checks which ones need
+        satellite imagery updates.
+        """
         for key, val in self.metadata.items():
+            if key == 'devices_intrinsec_settings':  # Skip non-region entries
+                continue
+
             self.region_dict[key] = Region(oriented_bbox(val["bbox_wgs84"]))
 
-            #  Verify if exists at least one region_view for the region
+            # Check if satellite imagery exists for this region
             region_view_path = self.root_dir / key / 'satellite' / 'global_view'
-            if (not region_view_path.exists()) or len(list(region_view_path.iterdir())) < 1:
+            if not region_view_path.exists() or not any(region_view_path.iterdir()):
                 self.updated_region.add(key)
 
-    def load_json(self):
+    def load_json(self) -> None:
+        """Load dataset metadata from JSON file.
+
+        If metadata file exists, loads it and initializes existing regions.
+        Otherwise, starts with empty metadata.
+        """
         if not self.metadata_json_path.exists():
             self.metadata = {}
         else:
@@ -104,7 +166,8 @@ class Dataset:
                 self.metadata = json.load(f)
             self.init_existing_dataset()
 
-    def save_metadata_json(self):
+    def save_metadata_json(self) -> None:
+        """Save current metadata to JSON file."""
         with open(self.metadata_json_path, "w") as file:
             json.dump(self.metadata, file, indent=4)
 
@@ -126,7 +189,22 @@ class Dataset:
             self.metadata.pop(former_name)
         return merge_region_name
 
-    def search_corresponding_region(self, zone_candidate: oriented_bbox):
+    def search_corresponding_region(self, zone_candidate: oriented_bbox) -> str:
+        """Find or create a region that contains the given zone.
+
+        Searches for existing regions that intersect with the candidate zone.
+        If none exist, creates a new region. If multiple exist and merging is enabled,
+        merges them into a single region.
+
+        Args:
+            zone_candidate: Bounding box to find a region for
+
+        Returns:
+            Name of the corresponding region
+
+        Raises:
+            ValueError: If multiple regions overlap but merging is disabled
+        """
         corresponding_region_candidates = []
         for region_name, region in self.region_dict.items():
             zone_region = region.zone
@@ -159,7 +237,15 @@ class Dataset:
                 raise ValueError('Merging Region is not allowed despite having a new area that should require it')
             return self.merge_region(corresponding_region_candidates)
 
-    def create_new_region(self, zone_region: oriented_bbox):
+    def create_new_region(self, zone_region: oriented_bbox) -> str:
+        """Create a new geographical region in the dataset.
+
+        Args:
+            zone_region: Bounding box defining the new region
+
+        Returns:
+            Unique name identifier for the new region
+        """
         new_region = Region(zone_region)
         name_region = new_region.name
         idx = 0
@@ -177,7 +263,12 @@ class Dataset:
                                               'bbox_wgs84': zone_region.get_wgs84_bbox(), "zones": {}}
         return name_region_in_dict
 
-    def download_global_tiff_updated_region(self, api_name='MapTiler'):
+    def download_global_tiff_updated_region(self, api_name: str = 'MapTiler') -> None:
+        """Download satellite imagery for all regions that have been updated.
+
+        Args:
+            api_name: Name of the satellite imagery API service
+        """
         for region_name in self.updated_region:
             #  Download the region tiff
             save_path = self.root_dir / region_name / 'satellite' / 'global_view' / f'{api_name}.tiff'
@@ -189,7 +280,15 @@ class Dataset:
             self.metadata[region_name]['global_view_path'] = str(save_path)
         self.save_metadata_json()
 
-    def retrieve_all_zone_from_region(self, selected_region):
+    def retrieve_all_zone_from_region(self, selected_region: str):
+        """Get all zone bounding boxes and names from a specific region.
+
+        Args:
+            selected_region: Name of the region to query
+
+        Returns:
+            Tuple of (list of zone bboxes in WGS84, list of zone names)
+        """
         zone_bbox_list = []
         zone_name_list = []
         for zone_name, zone_val in self.metadata[selected_region]['zones'].items():
@@ -197,12 +296,19 @@ class Dataset:
             zone_name_list.append(zone_name)
         return zone_bbox_list, zone_name_list
 
-    def extract_candidate_frames(self, video_path: Path, output_root: Path, output_folder_name: str = 'frames'):
-        """
-        Extracts frames from the video based on the delta_frames configuration.
-        """
+    def extract_candidate_frames(self, video_path: Path, output_root: Path,
+                                 output_folder_name: str = 'frames'):
+        """Extract candidate frames from drone video based on configuration.
 
-        print(f"      Input: {video_path}")
+        Args:
+            video_path: Path to the input video file
+            output_root: Root directory for extracted frames
+            output_folder_name: Name of the folder to store frames
+
+        Returns:
+            Tuple of (device_config, telemetry_metadata DataFrame)
+        """
+        print(f"      Processing: {video_path}")
 
         # Load configurations
         config_data = safe_load(open(self.config_file))
@@ -228,22 +334,44 @@ class Dataset:
         print(f"      Extracted {len(telemetry_metadata)} frames.")
         return device_config, telemetry_metadata
 
-    def create_zone(self, bbox: oriented_bbox, region_name: str):
-        #  To define a zone, we get some margin around the target
+    def create_zone(self, bbox: oriented_bbox, region_name: str) -> str:
+        """Create a new zone within a region.
+
+        Args:
+            bbox: Bounding box for the zone
+            region_name: Name of the parent region
+
+        Returns:
+            Name identifier for the created zone
+        """
+        # Expand zone with margin for complete coverage
         zone_bbox = bbox.generate_bbox_with_margin(self.margin)
+        zone_name = zone_bbox.mercator_name()
 
-        corresponding_zone_name = zone_bbox.mercator_name()
-        #  Initialize new zone in metadata
-        self.metadata[region_name]['zones'][corresponding_zone_name] = {}
-        self.metadata[region_name]['zones'][corresponding_zone_name]['drone'] = {}
-        self.metadata[region_name]['zones'][corresponding_zone_name]['satellite'] = {}
-        self.metadata[region_name]['zones'][corresponding_zone_name]['bbox_wgs84'] = zone_bbox.get_wgs84_bbox()
-        self.metadata[region_name]['zones'][corresponding_zone_name]['bbox_mercator'] = zone_bbox.get_mercator_bbox()
+        # Initialize zone metadata structure
+        self.metadata[region_name]['zones'][zone_name] = {
+            'drone': {},
+            'satellite': {},
+            'bbox_wgs84': zone_bbox.get_wgs84_bbox(),
+            'bbox_mercator': zone_bbox.get_mercator_bbox()
+        }
 
-        return corresponding_zone_name
+        return zone_name
 
-    def process_video(self, video_path: Path, fly_name: str):
-        # --- Step 1: Extract Frames from Video ---
+    def process_video(self, video_path: Path, fly_name: str) -> None:
+        """Process a drone video through the complete preprocessing pipeline.
+
+        This method performs the following steps:
+        1. Extract frames from video based on configuration
+        2. Calculate field-of-view (FOV) for each frame
+        3. Find or create corresponding geographical region
+        4. Prune redundant frames based on IoU and camera angle
+        5. Save filtered frames and update metadata
+
+        Args:
+            video_path: Path to the drone video file (.MP4)
+            fly_name: Identifier for this flight/video session
+        """
         print(f"\n[1/6] Starting Video Processing...")
         tmp_dir = self.root_dir / '.tmp' / video_path.stem
         tmp_dir_folder_name = 'frames'
@@ -268,12 +396,11 @@ class Dataset:
         fov_wgs84_list, rotation_matrix_list, global_bouding_box = compute_frames_fov(
             frames_metadata, img_width, img_height, camera_intrinsics)
 
-        # Store results back in dataframe
+        # Store both WGS84 and Mercator FOV coordinates
         frames_metadata['fov_wgs84'] = fov_wgs84_list
-
-        # Convert FOV coordinates to Web Mercator (Meters) for accurate area calculation
-        frames_metadata['fov_mercator'] = [convert_wgs84_to_mercator(
-            coords) for coords in frames_metadata['fov_wgs84']]
+        # Convert to Mercator in one batch (more efficient)
+        fov_mercator_list = [convert_wgs84_to_mercator(coords) for coords in fov_wgs84_list]
+        frames_metadata['fov_mercator'] = fov_mercator_list
 
         # --- Step 3: Download Satellite Imagery ---
         print(f"\n[3/6] Retrieve corresponding Region")
@@ -284,6 +411,7 @@ class Dataset:
         # --- Step 4: Prune Redundant Frames ---
         print(f"\n[4/6] Pruning Redundant Frames...")
 
+        # Retrieve existing zones to guide frame selection
         guide_coords_list_gps, guide_coords_zone_name = self.retrieve_all_zone_from_region(corresponding_region_name)
         guide_coords_list_mercator = [convert_wgs84_to_mercator(coords) for coords in guide_coords_list_gps]
 
@@ -304,17 +432,19 @@ class Dataset:
         save_frame_dir = working_dir / relative_dir
         save_frame_dir.mkdir(exist_ok=True, parents=True)
 
-        for frame_indice, corresponding_zone_idx in guided_matches_output.items():
-            frame_info = frames_metadata.iloc[frame_indice]
+        for frame_idx, zone_idx in guided_matches_output.items():
+            frame_info = frames_metadata.iloc[frame_idx]
             frame_info_dict = frame_info.to_dict()
             frame_filename = frame_info.name
             frame_zone = oriented_bbox(frame_info_dict['fov_wgs84'])
 
-            if corresponding_zone_idx is None:
-                corresponding_zone_name = self.create_zone(frame_zone, corresponding_region_name)
+            # Assign frame to existing zone or create new one
+            if zone_idx is None:
+                zone_name = self.create_zone(frame_zone, corresponding_region_name)
             else:
-                corresponding_zone_name = guide_coords_zone_name[corresponding_zone_idx]
+                zone_name = guide_coords_zone_name[zone_idx]
 
+            # Copy frame file to destination
             source_path = tmp_dir / tmp_dir_folder_name / frame_filename
             dest_path = save_frame_dir / frame_filename
             if source_path.exists():
@@ -322,14 +452,24 @@ class Dataset:
             else:
                 print(f"      Warning: Source file missing {source_path}")
 
-            id_drone = dest_path.stem
-            info_image_dict = {'image_path': str(relative_dir / frame_filename),
-                               'fly_id': fly_name}
-            info_image_dict |= frame_info_dict
-            self.metadata[corresponding_region_name]['zones'][corresponding_zone_name]['drone'][id_drone] = info_image_dict
+            # Update metadata with frame information
+            frame_id = dest_path.stem
+            frame_metadata = {
+                'image_path': str(relative_dir / frame_filename),
+                'fly_id': fly_name,
+                **frame_info_dict
+            }
+            self.metadata[corresponding_region_name]['zones'][zone_name]['drone'][frame_id] = frame_metadata
 
-    def download_tiles_corresponding_to_drone(self):
+    def download_tiles_corresponding_to_drone(self) -> None:
+        """Extract satellite tiles for each zone from global satellite imagery.
+
+        Iterates through all regions and zones, extracting the relevant portion
+        of the global satellite view for each zone's bounding box.
+        """
         for region_name, content in self.metadata.items():
+            if region_name == 'devices_intrinsec_settings':  # Skip non-region entries
+                continue
             global_view_folder = self.root_dir / region_name / 'satellite' / 'global_view'
             zones_dict = content['zones']
             for global_view in global_view_folder.iterdir():
@@ -348,7 +488,12 @@ class Dataset:
                         save_tile_to_disk(tile_result, str(save_tiff_file))
         self.save_metadata_json()
 
-    def run_extraction(self):
+    def run_extraction(self) -> None:
+        """Execute the complete extraction pipeline for all unprocessed videos.
+
+        Processes each video in the video directory that hasn't been extracted yet,
+        then downloads all necessary satellite imagery.
+        """
         already_extracted_flight = list(find_values_gen(self.metadata, "fly_id"))
         for fly_folder in self.video_dir.iterdir():
             if fly_folder.name in already_extracted_flight:
@@ -362,7 +507,12 @@ class Dataset:
         self.save_metadata_json()
         self.download_after_extraction()
 
-    def download_after_extraction(self):
+    def download_after_extraction(self) -> None:
+        """Download all satellite imagery after video extraction is complete.
+
+        First downloads global satellite views for updated regions,
+        then extracts local tiles for each zone.
+        """
         self.download_global_tiff_updated_region()
         self.download_tiles_corresponding_to_drone()
 

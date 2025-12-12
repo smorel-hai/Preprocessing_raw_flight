@@ -1,10 +1,29 @@
+"""UAV camera geometry and field-of-view calculation module.
+
+This module computes the ground footprint (Field of View) of drone camera frames
+using camera intrinsics, telemetry data, and coordinate transformations.
+
+Key functions:
+- get_rotation_matrix: Convert Euler angles to rotation matrix
+- process: Project camera pixels to ground coordinates
+- compute_frames_fov: Batch process multiple frames
+"""
+
 import numpy as np
 
 
-def get_rotation_matrix(pitch, yaw, roll):
-    """
-    Returns the Rotation Matrix from Body Frame to NED Frame.
-    Order: Yaw -> Pitch -> Roll (Standard Aerospace)
+def get_rotation_matrix(pitch: float, yaw: float, roll: float) -> np.ndarray:
+    """Compute the rotation matrix from Body Frame to NED (North-East-Down) Frame.
+
+    Applies rotations in order: Yaw -> Pitch -> Roll (standard aerospace convention).
+
+    Args:
+        pitch: Pitch angle in degrees (nose up/down)
+        yaw: Yaw angle in degrees (heading, 0=North, clockwise positive)
+        roll: Roll angle in degrees (wing tilt)
+
+    Returns:
+        3x3 rotation matrix for transforming body frame to NED frame
     """
     roll_rad = np.deg2rad(roll)
     yaw_rad = np.deg2rad(yaw)
@@ -29,17 +48,49 @@ def get_rotation_matrix(pitch, yaw, roll):
     return Rz @ Ry @ Rx
 
 
-def Rn(phi, a=6378137.0, e2=0.0066943799901413165):
-    """Meridional Radius of Curvature"""
-    return (a*(1 - e2)/np.power((1 - e2*np.sin(phi)**2), 3/2))
+def Rn(phi: float, a: float = 6378137.0, e2: float = 0.0066943799901413165) -> float:
+    """Calculate Meridional Radius of Curvature.
+
+    Args:
+        phi: Latitude in radians
+        a: Earth semi-major axis (WGS84 default)
+        e2: Earth eccentricity squared (WGS84 default)
+
+    Returns:
+        Meridional radius in meters
+    """
+    return (a * (1 - e2) / np.power((1 - e2 * np.sin(phi)**2), 3/2))
 
 
-def Re(phi, a=6378137.0, e2=0.0066943799901413165):
-    """Prime Vertical Radius of Curvature"""
-    return a / np.sqrt(1 - e2*np.sin(phi)**2)
+def Re(phi: float, a: float = 6378137.0, e2: float = 0.0066943799901413165) -> float:
+    """Calculate Prime Vertical Radius of Curvature.
+
+    Args:
+        phi: Latitude in radians
+        a: Earth semi-major axis (WGS84 default)
+        e2: Earth eccentricity squared (WGS84 default)
+
+    Returns:
+        Prime vertical radius in meters
+    """
+    return a / np.sqrt(1 - e2 * np.sin(phi)**2)
 
 
-def get_lat_lon_alt_from_NED_dep(x, y, z, phi0_deg, lam0_deg, h0):
+def get_lat_lon_alt_from_NED_dep(x: float, y: float, z: float,
+                                 phi0_deg: float, lam0_deg: float, h0: float) -> tuple:
+    """Convert NED (North-East-Down) offsets to geodetic coordinates.
+
+    Args:
+        x: North offset in meters
+        y: East offset in meters  
+        z: Down offset in meters (positive down)
+        phi0_deg: Reference latitude in degrees
+        lam0_deg: Reference longitude in degrees
+        h0: Reference altitude in meters
+
+    Returns:
+        Tuple of (latitude, longitude, altitude) in degrees and meters
+    """
     # Convert reference lat/lon to radians
     phi0_rad = np.deg2rad(phi0_deg)
 
@@ -56,10 +107,19 @@ def get_lat_lon_alt_from_NED_dep(x, y, z, phi0_deg, lam0_deg, h0):
     return phi.item(), lam.item(), h.item()
 
 
-def get_calibration_matrix(K_coefs, scale=(1, 1)):
+def get_calibration_matrix(K_coefs: list, scale: tuple = (1, 1)) -> np.ndarray:
+    """Construct camera intrinsic calibration matrix from coefficients.
+
+    Args:
+        K_coefs: List of [fx, fy, cx, cy] intrinsic parameters
+        scale: Optional (sx, sy) scaling factors for image resizing
+
+    Returns:
+        3x3 camera calibration matrix K
+    """
     sx, sy = scale
 
-    # 2. Construct Camera Matrix
+    # Construct Camera Matrix
     K = np.array([[K_coefs[0] * sx, 0, K_coefs[2] * sx],
                   [0, K_coefs[1] * sy, K_coefs[3] * sy],
                   [0, 0, 1]])

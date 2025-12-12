@@ -1,33 +1,60 @@
+"""Frame pruning module for removing redundant drone frames.
+
+This module provides functions to identify and remove redundant frames based on:
+- Spatial overlap (Intersection over Union)
+- Camera orientation (viewing angle similarity)
+- Guided zone matching (preferred coverage areas)
+"""
+
 import numpy as np
 from shapely.geometry import Polygon
 
 
-def get_forward_vector(rotation_matrix):
-    """
-    Extracts the forward viewing vector from a Rotation Matrix.
-    Assumes standard convention where the camera looks down the Z-axis (local [0,0,1]).
+def get_forward_vector(rotation_matrix: np.ndarray) -> np.ndarray:
+    """Extract the forward viewing direction from a rotation matrix.
 
-    If your convention is different (e.g., Y-axis), change the index below.
+    Assumes standard convention where the camera looks down the Z-axis.
+    The returned vector represents the direction the camera is pointed in world coordinates.
+
+    Args:
+        rotation_matrix: 3x3 rotation matrix from body to NED frame
+
+    Returns:
+        Normalized 3D forward viewing vector
     """
     matrix = np.array(rotation_matrix)
-    # The 3rd column (index 2) usually represents the Z-axis vector in world coordinates
+    # The 3rd column (index 2) represents the Z-axis vector in world coordinates
     forward_vector = matrix[:, 2]
     return forward_vector / np.linalg.norm(forward_vector)
 
 
-def calculate_angle_degrees(vec1, vec2):
+def calculate_angle_degrees(vec1: np.ndarray, vec2: np.ndarray) -> float:
+    """Calculate the angle in degrees between two 3D vectors.
+
+    Args:
+        vec1: First normalized 3D vector
+        vec2: Second normalized 3D vector
+
+    Returns:
+        Angle between vectors in degrees (0-180)
     """
-    Calculates the angle in degrees between two normalized 3D vectors.
-    """
-    # Dot product: a . b = |a||b|cos(theta) -> since normalized: cos(theta)
     dot_product = np.dot(vec1, vec2)
-    # Clip to handle floating point errors slightly outside [-1, 1]
+    # Clip to handle floating point errors
     dot_product = np.clip(dot_product, -1.0, 1.0)
     angle_rad = np.arccos(dot_product)
     return np.degrees(angle_rad)
 
 
-def calculate_iou(poly1, poly2):
+def calculate_iou(poly1: Polygon, poly2: Polygon) -> float:
+    """Calculate Intersection over Union (IoU) between two polygons.
+
+    Args:
+        poly1: First polygon
+        poly2: Second polygon
+
+    Returns:
+        IoU value between 0.0 (no overlap) and 1.0 (perfect overlap)
+    """
     if not poly1.intersects(poly2):
         return 0.0
     inter = poly1.intersection(poly2).area

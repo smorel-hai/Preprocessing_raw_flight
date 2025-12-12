@@ -28,7 +28,35 @@ PNP_SOLVERS = {
 }
 
 
-def get_camera_position_robust(image_points, object_points, camera_matrix, dist_coeffs=None, solver_type='SQPNP'):
+def get_camera_position_robust(image_points: np.ndarray, object_points: np.ndarray,
+                               camera_matrix: np.ndarray, dist_coeffs: np.ndarray = None,
+                               solver_type: str = 'SQPNP') -> tuple:
+    """Robustly estimate camera position using Perspective-n-Point algorithm.
+
+    This function solves for the camera pose (position and orientation) given:
+    - Known 3D points in world coordinates (object_points)
+    - Their corresponding 2D projections in the image (image_points)
+    - Camera calibration parameters
+
+    The function uses a centering trick to improve numerical stability with
+    large coordinate values (e.g., Web Mercator coordinates).
+
+    Args:
+        image_points: Nx2 array of pixel coordinates (x, y)
+        object_points: Nx3 array of 3D world coordinates (x, y, z)
+        camera_matrix: 3x3 camera intrinsic matrix K
+        dist_coeffs: Lens distortion coefficients (default: None/zero)
+        solver_type: PnP algorithm to use (default: 'SQPNP')
+            Options: 'SQPNP', 'ITERATIVE', 'IPPE', 'EPNP', 'P3P', 'AP3P'
+
+    Returns:
+        Tuple of (camera_position_global, rotation_vector)
+            - camera_position_global: 3D camera position in world coordinates
+            - rotation_vector: Rodrigues rotation vector
+
+    Raises:
+        ValueError: If PnP solution fails to converge
+    """
     if dist_coeffs is None:
         dist_coeffs = np.zeros((4, 1))
 
