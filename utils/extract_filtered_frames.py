@@ -120,8 +120,6 @@ def get_dji_dataframe(srt_path: str) -> pd.DataFrame:
     parser = DJIMetadataParser()
     dji_data_object = parser(srt_path)
     df = pd.DataFrame(dji_data_object.metadata)
-    if 'Timestamp' in df.columns:
-        df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
     return df
 
 
@@ -167,7 +165,7 @@ def save_valid_frames(video_path: Path, valid_indices: List[int], output_folder:
     skipped_count = 0
 
     for idx in valid_indices:
-        filename = output_folder / f"frame_{idx:06d}.jpg"
+        filename = output_folder / f"{video_path.stem}_{idx}.jpg"
         if filename.exists():
             skipped_count += 1
         else:
@@ -210,7 +208,7 @@ def save_valid_frames(video_path: Path, valid_indices: List[int], output_folder:
             if not ret:
                 break
 
-            filename = output_folder / f"frame_{current_frame:06d}.jpg"
+            filename = output_folder / f"{video_path.stem}_{current_frame}.jpg"
             cv2.imwrite(str(filename), frame)
             saved_new_count += 1
         else:
@@ -225,7 +223,7 @@ def save_valid_frames(video_path: Path, valid_indices: List[int], output_folder:
     print(f"Done. Newly extracted: {saved_new_count}. Output: {output_folder}")
 
 
-def run_pipeline(video_path: Path, config_path: str):
+def run_pipeline(video_path: Path, config_path: str, output_folder: str) -> Optional[pd.DataFrame]:
     """
     Main orchestration function:
     1. Loads Config & SRT
@@ -266,7 +264,6 @@ def run_pipeline(video_path: Path, config_path: str):
     # df_filtered.to_csv(video_path.parent / "filtered_metadata.csv", index=False)
 
     # 5. Extract Frames
-    output_folder = video_path.parent / "extracted_frames"
     save_valid_frames(video_path, valid_indices, output_folder)
 
     return df_filtered

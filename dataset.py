@@ -23,8 +23,8 @@ import reverse_geocoder as rg
 
 # Processing modules
 from retreieve_satellite_image_depending_on_coord import download_tiles, merge_tiles_to_geotiff
-from crotalinae_pg.data_preprocessing.raw.video_processor import VideoProcessor
-from crotalinae_pg.data_preprocessing.raw.utils.devices import load_device_config
+from utils.extract_filtered_frames import run_pipeline as filter_video
+from utils.devices import load_device_config
 from retrieve_position_from_UAV_view import compute_frames_fov
 from pruning_tile import prune_redundant_areas_with_rotation
 from extract_satellite_tile_from_drone_view import get_best_tile_for_fov, save_tile_to_disk
@@ -318,18 +318,7 @@ class Dataset:
         )
 
         # Initialize processor
-        video_processor = VideoProcessor(
-            config_data["preprocessing_args"]["camera_destination_name"],
-            output_root,
-            config_data["preprocessing_args"]["clips_computer_args"],
-            config_data["preprocessing_args"]["delta_frames"]
-        )
-
-        # Run extraction
-        video_processor.process(video_path, output_folder_name)
-
-        # Retrieve the dataframe containing telemetry (Lat, Lon, Yaw, Pitch, etc.)
-        telemetry_metadata = video_processor.frame_saver.metadata
+        telemetry_metadata = filter_video(video_path, self.config_file, output_root / output_folder_name)
 
         if self.verbose >= 1:
             print(f"      Extracted {len(telemetry_metadata)} frames.")
@@ -446,7 +435,7 @@ class Dataset:
         for frame_idx, zone_idx in guided_matches_output.items():
             frame_info = frames_metadata.iloc[frame_idx]
             frame_info_dict = frame_info.to_dict()
-            frame_filename = frame_info.name
+            frame_filename = f"{video_path.stem}_{frame_info.name}.jpg"
             frame_zone = oriented_bbox(frame_info_dict['fov_wgs84'])
 
             # Assign frame to existing zone or create new one
@@ -530,9 +519,9 @@ class Dataset:
 
 
 if __name__ == '__main__':
-    root_dir = 'data/preprocessing_extraction'
+    root_dir = 'data/preprocessing_extraction_sans_crotalinea'
     video_dir = '/home/sebastienmorel/Documents/Data/raw-flights/raw'
-    config_file = 'config/preprocessing/raw_preprocessing_config.yaml'
+    config_file = 'config/preprocessing/raw_preprocessing_config_refacto.yaml'
     margin = 0.1
     zoom = 17
     api_key = "SZ5Q6ilGzFm9Wge4GYp8"
