@@ -93,7 +93,7 @@ class Region:
         self.zone = new_zone
 
 
-class Dataset:
+class ExtractorDataset:
     def __init__(self, root_dir: str, video_dir: str, config_file: str, margin: float, zoom: int, api_key: str,
                  enable_region_merge: bool = True, iou_thrshold: float = 0.5, angle_threshold: float = 15.0,
                  guide_match_iou_threshold: float = 0.9, verbose: int = 0):
@@ -511,5 +511,5 @@ if __name__ == '__main__':
     # 0 = silent (no output)
     # 1 = normal (default, shows progress)
     # 2 = debug (shows additional debug info)
-    test_dataset = Dataset(root_dir, video_dir, config_file, margin, zoom, api_key, verbose=0)
+    test_dataset = ExtractorDataset(root_dir, video_dir, config_file, margin, zoom, api_key, verbose=0)
     test_dataset.run_extraction()
