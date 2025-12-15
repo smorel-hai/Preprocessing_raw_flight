@@ -15,33 +15,17 @@ from datetime import datetime
 from yaml import safe_load
 
 # Internal utilities
-from utils.utils import convert_wgs84_to_mercator, transfer_skip_existing_names, delete_folder, find_values_gen
-from utils.oriented_bbox import oriented_bbox, get_union_of_bboxes
-
-# External dependencies
-import reverse_geocoder as rg
+from src.mammoth.bison.utils.cooridinates_utils import convert_wgs84_to_mercator, get_city_from_point
+from src.mammoth.bison.utils.utils import transfer_skip_existing_names, delete_folder, find_values_gen
+from src.mammoth.bison.utils.oriented_bbox import oriented_bbox, get_union_of_bboxes
 
 # Processing modules
-from retreieve_satellite_image_depending_on_coord import download_tiles, merge_tiles_to_geotiff
-from utils.extract_filtered_frames import run_pipeline as filter_video
-from utils.devices import load_device_config
-from computing_fov_of_UAV import compute_frames_fov
-from pruning_tile import prune_redundant_areas_with_rotation
-from extract_satellite_tile_from_drone_view import get_best_tile_for_fov, save_tile_to_disk
-
-
-def get_city_from_point(lat: float, lon: float) -> str:
-    """Get the city name from GPS coordinates using reverse geocoding.
-
-    Args:
-        lat: Latitude in decimal degrees
-        lon: Longitude in decimal degrees
-
-    Returns:
-        City or town name at the given coordinates
-    """
-    results = rg.search((lat, lon))
-    return results[0]['name']
+from src.mammoth.bison.utils.maptiler import download_tiles, merge_tiles_to_geotiff
+from src.mammoth.bison.preprocessing.modules.extract_filtered_frames import run_pipeline as filter_video
+from src.mammoth.bison.utils.devices import load_device_config
+from src.mammoth.bison.utils.computing_fov_of_UAV import compute_frames_fov
+from src.mammoth.bison.preprocessing.modules.pruning_data import prune_redundant_areas_with_rotation
+from src.mammoth.bison.preprocessing.modules.extract_satellite_tile_from_drone_view import get_best_tile_for_fov, save_tile_to_disk
 
 
 class Region:
