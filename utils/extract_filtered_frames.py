@@ -271,9 +271,8 @@ def run_pipeline(video_path: Path, config_path: str, output_folder: str) -> Opti
 
 if __name__ == '__main__':
     # --- USAGE EXAMPLE ---
-    video_path = Path(
-        '/home/sebastienmorel/Documents/Code/projects/labo/preprocessing_rawflight_pipeline/data/raw_fights/DJI_202509271440_017/DJI_20250927144136_0001_V.MP4')
-    config_path = '/home/sebastienmorel/Documents/Code/projects/labo/preprocessing_rawflight_pipeline/config/preprocessing/raw_preprocessing_config_refacto.yaml'
+    video_path = Path('data/raw_fights/DJI_202511101344_002_Ajouter-balise5/DJI_20251110140051_0001_V.MP4')
+    config_path = 'config/preprocessing/raw_preprocessing_config_refacto.yaml'
 
     # Run the full pipeline
     filtered_df = run_pipeline(video_path, config_path)
