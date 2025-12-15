@@ -7,13 +7,13 @@ import shutil
 # Custom module imports
 from crotalinae_pg.data_preprocessing.raw.video_processor import VideoProcessor
 from crotalinae_pg.data_preprocessing.raw.utils.devices import load_device_config
-from computing_fov_of_UAV import compute_frames_fov, get_calibration_matrix
-from retreieve_satellite_image_depending_on_coord import download_tiles, get_bounding_box, merge_tiles_to_geotiff
-from pruning_tile import prune_redundant_areas_with_rotation
-from extract_satellite_tile_from_drone_view import get_best_tile_for_fov, save_tile_to_disk
-from pnp import get_camera_position_robust
-from utils.QGIS_generation_files import generate_multi_camera_geojson, generate_position_comparison_geojson
-from utils.utils import convert_wgs84_to_mercator, convert_mercator_to_wgs84
+from src.mammoth.bison.utils.computing_fov_of_UAV import compute_frames_fov, get_calibration_matrix
+from src.mammoth.bison.utils.maptiler import download_tiles, get_bounding_box, merge_tiles_to_geotiff
+from src.mammoth.bison.preprocessing.modules.pruning_data import prune_redundant_areas_with_rotation
+from src.mammoth.bison.preprocessing.modules.extract_satellite_tile_from_drone_view import get_best_tile_for_fov, save_tile_to_disk
+from src.mammoth.bison.position_retrieval.pnp import get_camera_position_robust
+from src.mammoth.bison.utils.qgis import generate_multi_camera_geojson, generate_position_comparison_geojson
+from src.mammoth.bison.utils.cooridinates_utils import convert_wgs84_to_mercator, convert_mercator_to_wgs84
 
 
 def extract_candidate_frames(video_path, output_root, config_path, frames_folder_name):

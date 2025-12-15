@@ -5,7 +5,7 @@ import io
 import re
 import numpy as np
 from PIL import Image, UnidentifiedImageError
-from utils.oriented_bbox import get_bounding_box
+from src.mammoth.bison.utils.oriented_bbox import get_bounding_box
 
 # Geospatial libraries (Required for stitching)
 import rasterio

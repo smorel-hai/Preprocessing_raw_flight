@@ -1,6 +1,6 @@
 from typing import List, Tuple, Optional
 import numpy as np
-from utils.utils import convert_wgs84_to_mercator
+from src.mammoth.bison.utils.cooridinates_utils import convert_wgs84_to_mercator
 
 
 def get_bounding_box(coordinate_list: List[Tuple[float, float]]) -> Tuple[Tuple[float, float], Tuple[float, float]]:
