@@ -7,7 +7,7 @@ import shutil
 # Custom module imports
 from crotalinae_pg.data_preprocessing.raw.video_processor import VideoProcessor
 from crotalinae_pg.data_preprocessing.raw.utils.devices import load_device_config
-from retrieve_position_from_UAV_view import compute_frames_fov, get_calibration_matrix
+from computing_fov_of_UAV import compute_frames_fov, get_calibration_matrix
 from retreieve_satellite_image_depending_on_coord import download_tiles, get_bounding_box, merge_tiles_to_geotiff
 from pruning_tile import prune_redundant_areas_with_rotation
 from extract_satellite_tile_from_drone_view import get_best_tile_for_fov, save_tile_to_disk

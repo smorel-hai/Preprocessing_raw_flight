@@ -5,7 +5,7 @@ using camera intrinsics, telemetry data, and coordinate transformations.
 
 Key functions:
 - get_rotation_matrix: Convert Euler angles to rotation matrix
-- process: Project camera pixels to ground coordinates
+- project_fov_to_ground: Project camera pixels to ground coordinates
 - compute_frames_fov: Batch process multiple frames
 """
 
@@ -48,8 +48,8 @@ def get_rotation_matrix(pitch: float, yaw: float, roll: float) -> np.ndarray:
     return Rz @ Ry @ Rx
 
 
-def Rn(phi: float, a: float = 6378137.0, e2: float = 0.0066943799901413165) -> float:
-    """Calculate Meridional Radius of Curvature.
+def get_meridional_radius(phi: float, a: float = 6378137.0, e2: float = 0.0066943799901413165) -> float:
+    """Calculate Meridional Radius of Curvature. (Rn in confluence).
 
     Args:
         phi: Latitude in radians
@@ -62,8 +62,8 @@ def Rn(phi: float, a: float = 6378137.0, e2: float = 0.0066943799901413165) -> f
     return (a * (1 - e2) / np.power((1 - e2 * np.sin(phi)**2), 3/2))
 
 
-def Re(phi: float, a: float = 6378137.0, e2: float = 0.0066943799901413165) -> float:
-    """Calculate Prime Vertical Radius of Curvature.
+def get_prime_vertical_radius(phi: float, a: float = 6378137.0, e2: float = 0.0066943799901413165) -> float:
+    """Calculate Prime Vertical Radius of Curvature (Re in confluence).
 
     Args:
         phi: Latitude in radians
@@ -95,8 +95,8 @@ def get_lat_lon_alt_from_NED_dep(x: float, y: float, z: float,
     phi0_rad = np.deg2rad(phi0_deg)
 
     # Calculate offsets
-    delta_phi = x / Rn(phi0_rad)
-    delta_lam = y / (Re(phi0_rad) * np.cos(phi0_rad))
+    delta_phi = x / get_meridional_radius(phi0_rad)
+    delta_lam = y / (get_prime_vertical_radius(phi0_rad) * np.cos(phi0_rad))
 
     # Add to original (in degrees)
     phi = phi0_deg + np.rad2deg(delta_phi)
@@ -126,7 +126,7 @@ def get_calibration_matrix(K_coefs: list, scale: tuple = (1, 1)) -> np.ndarray:
     return K
 
 
-def process(lat, lon, alt, rel_alt, pitch, yaw, roll, K_coefs, pxl_vectors, scale=(1, 1), verbose=-1):
+def project_fov_to_ground(lat, lon, alt, rel_alt, pitch, yaw, roll, K_coefs, pxl_vectors, scale=(1, 1), verbose=-1):
     # 1. Get Rotation Matrix (Body -> NED)
     # Note: Ensure pitch/roll/yaw match the drone's IMU frame (Nose Forward)
     R_body_to_ned = get_rotation_matrix(pitch, yaw, roll)
@@ -210,7 +210,7 @@ def compute_frames_fov(metadata_df, img_width, img_height, camera_intrinsics):
         pitch, yaw, roll = row['Gimbal Pitch'], row['Gimbal Yaw'], row['Gimbal Roll']
 
         # 1. Project image corners to the ground (WGS84 Coordinates)
-        fov_coords = process(
+        fov_coords = project_fov_to_ground(
             lat, lon, alt, rel_alt,
             pitch, yaw, roll,
             camera_intrinsics, image_corners_homogeneous
@@ -240,8 +240,8 @@ if __name__ == "__main__":
     K_coefs = [1387.265, 1387.644, 956.787, 537.653]
     image_shape = (1920, 1080)
 
-    coords = process(lat, lon, alt, rel_alt, pitch,
-                     yaw, roll, image_shape, K_coefs)
+    coords = project_fov_to_ground(lat, lon, alt, rel_alt, pitch,
+                                   yaw, roll, image_shape, K_coefs)
 
     print("\nCalculated Coordinates (Lat, Lon, Alt):")
     for pt in coords:

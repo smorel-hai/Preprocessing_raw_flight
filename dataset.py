@@ -25,7 +25,7 @@ import reverse_geocoder as rg
 from retreieve_satellite_image_depending_on_coord import download_tiles, merge_tiles_to_geotiff
 from utils.extract_filtered_frames import run_pipeline as filter_video
 from utils.devices import load_device_config
-from retrieve_position_from_UAV_view import compute_frames_fov
+from computing_fov_of_UAV import compute_frames_fov
 from pruning_tile import prune_redundant_areas_with_rotation
 from extract_satellite_tile_from_drone_view import get_best_tile_for_fov, save_tile_to_disk
 
