@@ -258,7 +258,7 @@ class Dataset:
 
         #  Update metadata_json with the new region
         self.metadata[name_region_in_dict] = {'name': name_region,
-                                              'bbox_wgs84': zone_region.get_wgs84_bbox(), "zones": {}}
+                                              'bbox_wgs84': new_region.get_wgs84_bbox(), "zones": {}}
         return name_region_in_dict
 
     def download_global_tiff_updated_region(self, api_name: str = 'MapTiler') -> None:
