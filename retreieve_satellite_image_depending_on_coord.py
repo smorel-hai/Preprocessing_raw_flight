@@ -1,10 +1,11 @@
 import math
 import requests
-import os
+from pathlib import Path
 import io
 import re
 import numpy as np
 from PIL import Image, UnidentifiedImageError
+from utils.oriented_bbox import get_bounding_box
 
 # Geospatial libraries (Required for stitching)
 import rasterio
@@ -17,26 +18,6 @@ Image.MAX_IMAGE_PIXELS = None
 R = 6378137
 MAX_METERS = 2 * math.pi * R
 ORIGIN_SHIFT = MAX_METERS / 2.0
-
-
-def get_bounding_box(point1, point2):
-    """
-    Takes two arbitrary points and returns the North-West and South-East 
-    corners required to create a North-aligned bounding box.
-    """
-    lat1, lon1 = point1
-    lat2, lon2 = point2
-
-    # Find the extremes
-    max_lat = max(lat1, lat2)  # North
-    min_lat = min(lat1, lat2)  # South
-    max_lon = max(lon1, lon2)  # East
-    min_lon = min(lon1, lon2)  # West
-
-    nw_corner = (max_lat, min_lon)
-    se_corner = (min_lat, max_lon)
-
-    return nw_corner, se_corner
 
 
 def lat_lon_to_tile(lat, lon, zoom):
@@ -69,16 +50,14 @@ def get_tile_bounds_in_meters(tx, ty, zoom):
     return min_x, min_y, max_x, max_y
 
 
-def download_tiles(top_left, bottom_right, api_key, output_dir, zoom=19):
+def download_tiles(top_left, bottom_right, api_key, output_dir: str, zoom=19):
     """
     Downloads individual tiles within a bounding box at a specific zoom level.
     Saves them as individual JPG files.
     """
     # --- 1. Directory Setup ---
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-        print(f"Created directory: {output_dir}")
-
+    output_dir = Path(output_dir)
+    output_dir.mkdir(exist_ok=True, parents=True)
     # --- 2. Calculate Grid ---
     lat_max, lon_min = top_left
     lat_min, lon_max = bottom_right
@@ -107,17 +86,16 @@ def download_tiles(top_left, bottom_right, api_key, output_dir, zoom=19):
         for y in range(y_min, y_max + 1):
             url = f"https://api.maptiler.com/tiles/satellite-v2/{zoom}/{x}/{y}.jpg?key={api_key}"
             filename = f"tile_z{zoom}_x{x}_y{y}.jpg"
-            file_path = os.path.join(output_dir, filename)
+            file_path = output_dir / filename
 
             # Skip if already exists (optional, but good for large jobs)
-            if os.path.exists(file_path):
+            if file_path.exists():
                 print(f"Skipping existing: {filename}", end='\r')
                 count += 1
                 continue
 
             try:
                 r = requests.get(url, headers=headers, stream=True, timeout=10)
-
                 if r.status_code == 200:
                     # Optional: Verify it's a valid image before saving
                     try:
@@ -152,17 +130,19 @@ def merge_tiles_to_geotiff(input_dir, output_file, zoom):
     pattern = re.compile(r"tile_z(\d+)_x(\d+)_y(\d+)\.jpg")
     files = []
 
-    if not os.path.exists(input_dir):
-        print(f"Error: Input directory '{input_dir}' does not exist.")
+    input_dir = Path(input_dir)
+
+    if not input_dir.exists():
+        print(f"Error: Input directory '{str(input_dir)}' does not exist.")
         return
 
-    for f in os.listdir(input_dir):
-        match = pattern.match(f)
+    for f in input_dir.iterdir():
+        match = pattern.match(f.name)
         if match:
             z, x, y = map(int, match.groups())
             # IMPORTANT: Filter by zoom to avoid mixing different resolution tiles
             if z == zoom:
-                files.append({'filename': f, 'z': z, 'x': x, 'y': y})
+                files.append({'filename': f.name, 'z': z, 'x': x, 'y': y})
 
     if not files:
         print(f"No tile files found matching pattern 'tile_z{zoom}_x*_y*.jpg'")
@@ -180,8 +160,6 @@ def merge_tiles_to_geotiff(input_dir, output_file, zoom):
     full_w = width_tiles * 512
     full_h = height_tiles * 512
 
-    print(full_w, full_h)
-
     print(
         f"Detected Mosaic Size: {width_tiles}x{height_tiles} tiles ({full_w}x{full_h} pixels)")
 
@@ -195,7 +173,7 @@ def merge_tiles_to_geotiff(input_dir, output_file, zoom):
             px = (f['x'] - min_x) * 512
             py = (f['y'] - min_y) * 512
 
-            tile_path = os.path.join(input_dir, f['filename'])
+            tile_path = input_dir / f['filename']
             tile_img = Image.open(tile_path)
             mosaic.paste(tile_img, (px, py))
         except Exception as e:
@@ -251,7 +229,7 @@ if __name__ == "__main__":
     p2 = (48.698000, 2.029500)
 
     ZOOM_LEVEL = 19
-    nw_corner, se_corner = get_bounding_box(p1, p2)
+    nw_corner, se_corner = get_bounding_box([p1, p2])
 
     # Step 1: Download
     download_tiles(

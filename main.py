@@ -7,13 +7,13 @@ import shutil
 # Custom module imports
 from crotalinae_pg.data_preprocessing.raw.video_processor import VideoProcessor
 from crotalinae_pg.data_preprocessing.raw.utils.devices import load_device_config
-from retrieve_position_from_UAV_view import compute_frames_fov, get_calibration_matrix
+from computing_fov_of_UAV import compute_frames_fov, get_calibration_matrix
 from retreieve_satellite_image_depending_on_coord import download_tiles, get_bounding_box, merge_tiles_to_geotiff
 from pruning_tile import prune_redundant_areas_with_rotation
 from extract_satellite_tile_from_drone_view import get_best_tile_for_fov, save_tile_to_disk
 from pnp import get_camera_position_robust
 from utils.QGIS_generation_files import generate_multi_camera_geojson, generate_position_comparison_geojson
-from utils.utils import convert_wgs84_to_web_mercator, convert_mercator_to_wgs84
+from utils.utils import convert_wgs84_to_mercator, convert_mercator_to_wgs84
 
 
 def extract_candidate_frames(video_path, output_root, config_path, frames_folder_name):
@@ -74,7 +74,7 @@ def main(video_path, output_root, config_path, api_key, zoom_level, iou_threshol
     print(f"\n[3/6] Downloading Satellite Imagery...")
 
     # Calculate the North-West and South-East corners for the tile downloader
-    nw_corner, se_corner = get_bounding_box(*global_bouding_box)
+    nw_corner, se_corner = get_bounding_box(global_bouding_box)
 
     satellite_download_dir = working_dir / f"Tiles_z{zoom_level}"
     tiles_storage_dir = satellite_download_dir / 'zone_tiles'
@@ -92,7 +92,7 @@ def main(video_path, output_root, config_path, api_key, zoom_level, iou_threshol
     print(f"\n[4/6] Pruning Redundant Frames...")
 
     # Convert FOV coordinates to Web Mercator (Meters) for accurate area calculation
-    metadata_df['fov_mercator'] = [convert_wgs84_to_web_mercator(coords) for coords in metadata_df['fov_wgs84']]
+    metadata_df['fov_mercator'] = [convert_wgs84_to_mercator(coords) for coords in metadata_df['fov_wgs84']]
 
     # Save updated metadata before pruning
     metadata_df.to_csv(working_dir / frames_folder_name / "metadata_fov.csv")
@@ -176,7 +176,7 @@ def main(video_path, output_root, config_path, api_key, zoom_level, iou_threshol
             pose_estimation, rec = get_camera_position_robust(image_corners_homogeneous[:, :2],
                                                               np.array(fov_mercator), calibration_matrix)
             #  Convert the real position to mercator for computing error of position
-            pos_mercator = convert_wgs84_to_web_mercator([[lat, lon]])[0]
+            pos_mercator = convert_wgs84_to_mercator([[lat, lon]])[0]
             error_estimation_norm.append(np.linalg.norm(np.array(pose_estimation)[:2] - np.array(pos_mercator)))
             #  Convert the estimated position to gps for QGIS functions
             pose_estimation_gps = convert_mercator_to_wgs84([pose_estimation])[0]

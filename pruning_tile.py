@@ -1,107 +1,194 @@
+"""Frame pruning module for removing redundant drone frames.
+
+This module provides functions to identify and remove redundant frames based on:
+- Spatial overlap (Intersection over Union)
+- Camera orientation (viewing angle similarity)
+- Guided zone matching (preferred coverage areas)
+"""
+
 import numpy as np
 from shapely.geometry import Polygon
 
 
-def get_forward_vector(rotation_matrix):
-    """
-    Extracts the forward viewing vector from a Rotation Matrix.
-    Assumes standard convention where the camera looks down the Z-axis (local [0,0,1]).
+def get_forward_vector(rotation_matrix: np.ndarray) -> np.ndarray:
+    """Extract the forward viewing direction from a rotation matrix.
 
-    If your convention is different (e.g., Y-axis), change the index below.
+    Assumes standard convention where the camera looks down the Z-axis.
+    The returned vector represents the direction the camera is pointed in world coordinates.
+
+    Args:
+        rotation_matrix: 3x3 rotation matrix from body to NED frame
+
+    Returns:
+        Normalized 3D forward viewing vector
     """
     matrix = np.array(rotation_matrix)
-    # The 3rd column (index 2) usually represents the Z-axis vector in world coordinates
+    # The 3rd column (index 2) represents the Z-axis vector in world coordinates
     forward_vector = matrix[:, 2]
     return forward_vector / np.linalg.norm(forward_vector)
 
 
-def calculate_angle_degrees(vec1, vec2):
+def calculate_angle_degrees(vec1: np.ndarray, vec2: np.ndarray) -> float:
+    """Calculate the angle in degrees between two 3D vectors.
+
+    Args:
+        vec1: First normalized 3D vector
+        vec2: Second normalized 3D vector
+
+    Returns:
+        Angle between vectors in degrees (0-180)
     """
-    Calculates the angle in degrees between two normalized 3D vectors.
-    """
-    # Dot product: a . b = |a||b|cos(theta) -> since normalized: cos(theta)
     dot_product = np.dot(vec1, vec2)
-    # Clip to handle floating point errors slightly outside [-1, 1]
+    # Clip to handle floating point errors
     dot_product = np.clip(dot_product, -1.0, 1.0)
     angle_rad = np.arccos(dot_product)
     return np.degrees(angle_rad)
 
 
-def calculate_iou(poly1, poly2):
+def calculate_iou(poly1: Polygon, poly2: Polygon) -> float:
+    """Calculate Intersection over Union (IoU) between two polygons.
+
+    Args:
+        poly1: First polygon
+        poly2: Second polygon
+
+    Returns:
+        IoU value between 0.0 (no overlap) and 1.0 (perfect overlap)
+    """
     if not poly1.intersects(poly2):
         return 0.0
     inter = poly1.intersection(poly2).area
     union = poly1.union(poly2).area
     return inter / union if union > 0 else 0.0
 
+# --- MAIN FUNCTION ---
+
 
 def prune_redundant_areas_with_rotation(
     coords_list,
     rotation_matrices,
     max_areas_to_keep,
-    iou_threshold=0.5,
-    angle_threshold_degrees=15.0
+    guide_coords_list=None,
+    redundancy_iou_threshold=0.5,
+    angle_threshold_degrees=15.0,
+    min_inclusion_ratio=0.99  # 99% inside implies "Totally Inside" (allows for tiny rounding errors)
 ):
     """
-    Prunes overlapping areas, but KEEPS them if they have different viewing angles.
+    1. Guide Selection: Isolates items TOTALLY INSIDE the guides.
+       - Keeps the biggest item per guide.
+       - DISCARDS all other items that are totally inside guides.
+    2. Standard Pruning: Runs on items that are OUTSIDE the guides.
+
+    Returns:
+    {
+        "guided_matches": [ {'guide_index': 0, 'id': 12}, ... ],
+        "standard_matches": [ 45, 98, ... ]
+    }
     """
 
-    # 1. Pre-process: Create (Polygon, ViewVector, OriginalIndex) tuples
-    poly_data = []
-
+    # --- 1. Pre-process Candidates ---
+    candidate_data = []
     for i, coords in enumerate(coords_list):
         try:
             p = Polygon(coords)
             if not p.is_valid:
                 p = p.convex_hull
-
             if p.is_valid and p.area > 0:
-                # Extract the view vector immediately to save time later
-                view_vec = get_forward_vector(rotation_matrices[i])
-                poly_data.append({
+                candidate_data.append({
                     'poly': p,
-                    'vec': view_vec,
+                    'vec': get_forward_vector(rotation_matrices[i]),
                     'id': i,
                     'area': p.area
                 })
         except ValueError:
             continue
 
-    # 2. Sort by Area (Descending)
-    poly_data.sort(key=lambda x: x['area'], reverse=True)
+    # --- 2. Pre-process Guides ---
+    guide_data = []
+    if guide_coords_list:
+        for i, g_coords in enumerate(guide_coords_list):
+            try:
+                p = Polygon(g_coords)
+                if not p.is_valid:
+                    p = p.convex_hull
+                if p.is_valid and p.area > 0:
+                    guide_data.append({'poly': p, 'index': i})
+            except ValueError:
+                continue
 
-    kept_items = []  # Stores the full dictionaries of kept items
+    all_kept_items = []
+    guided_matches_output = {}
 
-    # 3. Iterate
-    for current in poly_data:
-        if len(kept_items) >= max_areas_to_keep:
+    # Track IDs that were found totally inside guides (Winners AND Losers)
+    # These will be strictly excluded from Phase 2
+    ids_found_totally_inside = set()
+
+    # --- 3. PHASE 1: Guide Selection (Strict Inclusion) ---
+
+    for guide in guide_data:
+        if len(all_kept_items) >= max_areas_to_keep:
+            break
+
+        candidates_inside_this_guide = []
+
+        for cand in candidate_data:
+            # Quick check: does it intersect?
+            if guide['poly'].intersects(cand['poly']):
+                inter_area = guide['poly'].intersection(cand['poly']).area
+                cand_area = cand['poly'].area
+
+                if cand_area > 0:
+                    ratio_inside = inter_area / cand_area
+
+                    # CRITERIA: Strictly Inside (e.g., > 99%)
+                    if ratio_inside >= min_inclusion_ratio:
+                        candidates_inside_this_guide.append(cand)
+
+                        # Mark this candidate as "Inside a Guide".
+                        # It will be processed here (win or lose) and skipped in Phase 2.
+                        ids_found_totally_inside.add(cand['id'])
+
+        # Pick the winner for this guide (Biggest item totally inside)
+        if candidates_inside_this_guide:
+            candidates_inside_this_guide.sort(key=lambda x: x['area'], reverse=True)
+            winner = candidates_inside_this_guide[0]
+
+            guided_matches_output[winner['id']] = guide['index']
+
+            # Add to main kept list if not duplicate
+            if not any(k['id'] == winner['id'] for k in all_kept_items):
+                all_kept_items.append(winner)
+
+    # --- 4. PHASE 2: Standard Pruning for Outsiders ---
+
+    # Outsider Pool = Candidates that were NOT totally inside any guide.
+    # (Items that were partially inside or completely outside are allowed here)
+    outsider_pool = [c for c in candidate_data if c['id'] not in ids_found_totally_inside]
+
+    # Sort by Area (Descending)
+    outsider_pool.sort(key=lambda x: x['area'], reverse=True)
+
+    for current in outsider_pool:
+        if len(all_kept_items) >= max_areas_to_keep:
             break
 
         is_redundant = False
 
-        for kept in kept_items:
-            # A. Check Spatial Overlap first (usually faster to reject)
+        for kept in all_kept_items:
+            # Check overlap against Winners from Phase 1 AND other Phase 2 selections
             iou = calculate_iou(current['poly'], kept['poly'])
 
-            if iou > iou_threshold:
-                # B. High overlap found. Now check if the VIEW is also similar.
-                angle_diff = calculate_angle_degrees(
-                    current['vec'], kept['vec'])
-
-                # If the views are too similar (low angle difference), it is redundant.
-                # If the views are different (high angle difference), we KEEP it (not redundant).
+            if iou > redundancy_iou_threshold:
+                angle_diff = calculate_angle_degrees(current['vec'], kept['vec'])
                 if angle_diff < angle_threshold_degrees:
                     is_redundant = True
                     break
 
         if not is_redundant:
-            kept_items.append(current)
+            all_kept_items.append(current)
+            guided_matches_output[current['id']] = None
 
-    # 4. Extract original indices and sort them
-    result_indices = [item['id'] for item in kept_items]
-    result_indices.sort()
-
-    return result_indices
+    return guided_matches_output
 
 # --- Example Usage ---
 

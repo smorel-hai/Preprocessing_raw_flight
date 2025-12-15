@@ -12,5 +12,5 @@ preprocessing_args:
       min_alt: 0
       min_pitch: -100
       max_pitch: -50
-      threshold_gimbal_rotation: 20
+      threshold_gimbal: 3
   delta_frames: 3
